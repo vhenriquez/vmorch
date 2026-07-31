@@ -19,7 +19,8 @@ def cmd_images(args) -> None:
     for key, entry in sorted(images.CATALOGUE.items()):
         mark = "cached" if entry.cached.exists() else "      "
         base = "base" if images.base_path(entry).exists() else "    "
-        print(f"  {mark} {base}  {key:<14} {entry.description}")
+        flag = "     " if entry.verified else "BROKEN"
+        print(f"  {mark} {base} {flag} {key:<14} {entry.description}")
 
 
 def cmd_new(args) -> None:

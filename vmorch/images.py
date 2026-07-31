@@ -8,7 +8,7 @@ Storage split, forced by the hardware (see docs/host-capability-check.md):
 
   ~/vmorch/cloud_images/   pristine downloads. HDD, cold, written
                                          once, kept so a rebuild needs no network
-  ~/.local/share/vmorch/bases/           golden images. NVMe, because qcow2
+  ~/vmorch/bases/                        golden images. NVMe, because qcow2
                                          backing chains read the base on every
                                          access to an unmodified block
 
@@ -36,6 +36,9 @@ class CatalogueEntry:
     sums_algo: str          # distros disagree; Debian ships SHA512, Ubuntu SHA256
     os_variant: str         # for virt-install --osinfo
     package_manager: str
+    # False for images known not to work. Surfaced in the UI so that pressing
+    # Enter through a dialog cannot land you on a broken image.
+    verified: bool = True
 
     @property
     def filename(self) -> str:
@@ -66,6 +69,7 @@ CATALOGUE: dict[str, CatalogueEntry] = {
         sums_algo="sha512",
         os_variant="debian12",
         package_manager="apt",
+        verified=False,     # cloud-init never runs; see the note above
     ),
     "debian-13": CatalogueEntry(
         key="debian-13",
@@ -75,6 +79,7 @@ CATALOGUE: dict[str, CatalogueEntry] = {
         sums_algo="sha512",
         os_variant="debian13",
         package_manager="apt",
+        verified=False,     # untested; debian-12 is broken, assume nothing
     ),
     "ubuntu-24.04": CatalogueEntry(
         key="ubuntu-24.04",
