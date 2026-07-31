@@ -52,6 +52,7 @@ def _filesystem_xml(spec: BoxSpec) -> str:
 
 
 def _interfaces_xml(spec: BoxSpec, mac: str, wan_mac: str) -> str:
+    box_filter = f'vmorch-box-{spec.name}'
     # nic0: management. Always present. <port isolated='yes'/> stops this box
     # reaching any other box on the same bridge -- boxes are single-agent and
     # have no reason to talk to each other. libvirt 12.0.0 supports it.
@@ -61,7 +62,7 @@ def _interfaces_xml(spec: BoxSpec, mac: str, wan_mac: str) -> str:
       <mac address='{mac}'/>
       <model type='virtio'/>
       <port isolated='yes'/>
-      <filterref filter='vmorch-mgmt-filter'/>
+      <filterref filter='{box_filter}'/>
     </interface>"""
     ]
 

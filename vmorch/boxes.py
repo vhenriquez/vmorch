@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import (alloc, cloudinit, config, domain, guest, hostaccess, images,
-               network, spec as spec_mod, sshconf, virsh)
+               network, services, spec as spec_mod, sshconf, virsh)
 from .spec import BoxSpec
 
 
@@ -135,6 +135,8 @@ def create(box_spec: BoxSpec, start: bool = True) -> Box:
     box_dir(box_spec.name).mkdir(parents=True, exist_ok=True)
     spec_path(box_spec.name).write_text(spec_mod.dump(box_spec))
 
+    services.ensure_box_filter(box_spec)
+
     disk = _create_overlay(box_spec, base)
     seed = cloudinit.build_seed(box_spec, box_dir(box_spec.name),
                                 allocation.mac, allocation.wan_mac)
@@ -168,6 +170,7 @@ def apply(name: str) -> Box:
     """
     box = load(name)
     allocation = alloc.allocate(name)
+    services.ensure_box_filter(box.spec)
 
     xml = domain.build(
         box.spec,
@@ -221,6 +224,7 @@ def destroy(name: str, keep_disk: bool = False) -> None:
     if not keep_disk:
         shutil.rmtree(box_dir(name), ignore_errors=True)
 
+    services.delete_box_filter(name)
     alloc.release(name)
     _regenerate_ssh()
 
@@ -269,6 +273,44 @@ def share(name: str, host_path: Path, tag: str | None = None,
         _wait_reachable(name)
         guest.mount_folder(name, folder)
     return box
+
+
+def grant_service(name: str, svc_name: str, host_port: int, guest_port: int,
+                  via: str = "filter") -> Box:
+    """Let a box reach a host service. Every grant is a deliberate hole."""
+    box = load(name)
+    if any(s.name == svc_name for s in box.spec.from_host):
+        raise BoxError(f"box {name!r} already has service {svc_name!r}")
+
+    entry = {"name": svc_name, "host": host_port, "guest": guest_port, "via": via}
+    box.spec.from_host.append(
+        spec_mod._parse_service(entry, len(box.spec.from_host) + 1,
+                                spec_mod.VALID_VIA_FROM_HOST, "filter")
+    )
+    save_spec(box.spec)
+    box = apply(name)
+
+    if box.state == "running" and via == "filter":
+        _wait_reachable(name)
+        script = services.guest_relay_script(box.spec)
+        if script:
+            guest.run(name, script)
+    return box
+
+
+def revoke_service(name: str, svc_name: str) -> Box:
+    box = load(name)
+    remaining = [s for s in box.spec.from_host if s.name != svc_name]
+    if len(remaining) == len(box.spec.from_host):
+        raise BoxError(f"box {name!r} has no service {svc_name!r}")
+
+    if virsh.domain_state(box.spec.domain) == "running" and guest.reachable(name):
+        guest.run(name, f"systemctl disable --now vmorch-relay-{svc_name}.service "
+                        f"2>/dev/null || true", check=False)
+
+    box.spec.from_host = remaining
+    save_spec(box.spec)
+    return apply(name)
 
 
 def unshare(name: str, tag: str) -> Box:

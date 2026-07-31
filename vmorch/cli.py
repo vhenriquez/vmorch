@@ -146,6 +146,21 @@ def cmd_logs(args) -> None:
         print(line)
 
 
+def cmd_service(args) -> None:
+    guest_port = args.guest_port or args.host_port
+    box = boxes.grant_service(args.name, args.service, args.host_port,
+                              guest_port, args.via)
+    print(f"granted {args.service}: host:{args.host_port} -> "
+          f"{box.name} guest:{guest_port} via {args.via}")
+    print("  note: this is a hole in the guest->host block. The service's own "
+          "auth is the only\n        control behind it.")
+
+
+def cmd_revoke(args) -> None:
+    box = boxes.revoke_service(args.name, args.service)
+    print(f"revoked {args.service} from {box.name}")
+
+
 def cmd_net(args) -> None:
     created = network.ensure_base()
     print(f"management network {config.MGMT_NET}: "
@@ -213,6 +228,20 @@ def build_parser() -> argparse.ArgumentParser:
     un.add_argument("name")
     un.add_argument("tag")
     un.set_defaults(func=cmd_unshare)
+
+    sv = sub.add_parser("service", help="grant a box access to a host service")
+    sv.add_argument("name")
+    sv.add_argument("service", help="e.g. ollama")
+    sv.add_argument("--host-port", type=int, required=True)
+    sv.add_argument("--guest-port", type=int)
+    sv.add_argument("--via", default="filter",
+                    choices=sorted(spec_mod.VALID_VIA_FROM_HOST))
+    sv.set_defaults(func=cmd_service)
+
+    rv = sub.add_parser("revoke", help="revoke a granted service")
+    rv.add_argument("name")
+    rv.add_argument("service")
+    rv.set_defaults(func=cmd_revoke)
 
     lg = sub.add_parser("logs", help="show a box's console log")
     lg.add_argument("name")
