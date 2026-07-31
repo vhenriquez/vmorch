@@ -24,6 +24,12 @@ it, and F9 lists every action with its shortcut.
 1Help 2Snap 3View 4Edit 5Share 6Srvc 7New 8Del 9Menu 10Quit
 ```
 
+Colours come from the fixed 16-255 region of the xterm-256 palette, not the
+8-colour names. Colours 0-15 are remapped by the terminal theme, and on a light
+theme "white on blue" lands around 1.5:1 — unreadable. Every pair is now
+measured: `python3 tests/test_contrast.py` prints the WCAG ratio for each, and
+all of them clear AAA (7:1), the lowest being dim text at 8.5:1.
+
 Left panel = boxes, right panel = that box's grants. F8 is contextual: on the
 left it destroys a box, on the right it revokes the one folder or service under
 the cursor. Enter on a box opens a real ssh session; Enter on a snapshot rolls

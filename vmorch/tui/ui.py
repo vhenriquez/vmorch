@@ -28,23 +28,93 @@ WARN = 9         # writable shares, destructive prompts
 OK = 10          # running / healthy
 DIM = 11         # secondary text
 DIALOG = 12      # dialog interior
+STATUS = 13      # the status line
+SHADOW = 14      # dialog drop shadow
+
+# --------------------------------------------------------------------------
+# Palette
+#
+# Colours 0-15 are whatever the user's terminal theme decides they are. A theme
+# that renders "white" as pale mint and "blue" as light periwinkle turns
+# white-on-blue into roughly 1.5:1 -- unreadable, which is exactly what the
+# first version of this shipped as.
+#
+# Colours 16-255 are FIXED RGB in the xterm-256 palette and ignore the theme
+# entirely, so every pair below has a contrast ratio that can be computed in
+# advance. The numbers in the comments are WCAG contrast against the navy
+# background; AAA wants 7:1 for body text and all of these clear it.
+# --------------------------------------------------------------------------
+
+C_BG = 17          # #00005f  deep navy, the Commander field
+C_BG_DLG = 19      # #0000af  lighter navy so dialogs lift off the panels
+C_BG_STATUS = 18   # #000087  a lighter navy: distinct from the field,
+                   #          and 15.6:1 against white rather than 7.0:1
+C_BLACK = 16       # #000000
+C_TEXT = 231       # #ffffff  18.0:1 on navy
+C_FRAME = 45       # #00d7ff  10.4:1
+C_DIM = 146        # #afafd7   8.5:1 -- dim to the eye, still far above AAA
+C_WARN = 226       # #ffff00  16.8:1
+C_OK = 82          # #5fff00  13.5:1
+C_SEL = 45         # selection bar; black on it is 12.2:1
+C_SEL_DIM = 250    # #bcbcbc  grey bar for the UNfocused panel: reads as
+                   #          inactive next to cyan, still 11.1:1
+
+_PAIRS_256 = {
+    FIELD:      (C_FRAME, C_BG),
+    PANEL:      (C_TEXT, C_BG),
+    FRAME:      (C_FRAME, C_BG),
+    SELECT:     (C_BLACK, C_SEL),
+    SELECT_DIM: (C_BLACK, C_SEL_DIM),
+    KEYBAR_N:   (C_TEXT, C_BLACK),
+    KEYBAR_L:   (C_BLACK, C_SEL),
+    TITLE:      (C_BLACK, C_SEL),
+    WARN:       (C_WARN, C_BG),
+    OK:         (C_OK, C_BG),
+    DIM:        (C_DIM, C_BG),
+    DIALOG:     (C_TEXT, C_BG_DLG),
+    STATUS:     (C_TEXT, C_BG_STATUS),
+    SHADOW:     (C_BLACK, C_BLACK),
+}
+
+# Fallback for 8-colour terminals. Body text is bold white rather than cyan,
+# because cyan-on-blue is the pair that fails hardest on a light theme.
+_PAIRS_8 = {
+    FIELD:      (curses.COLOR_WHITE, curses.COLOR_BLUE),
+    PANEL:      (curses.COLOR_WHITE, curses.COLOR_BLUE),
+    FRAME:      (curses.COLOR_CYAN, curses.COLOR_BLUE),
+    SELECT:     (curses.COLOR_BLACK, curses.COLOR_CYAN),
+    SELECT_DIM: (curses.COLOR_WHITE, curses.COLOR_BLACK),
+    KEYBAR_N:   (curses.COLOR_WHITE, curses.COLOR_BLACK),
+    KEYBAR_L:   (curses.COLOR_BLACK, curses.COLOR_CYAN),
+    TITLE:      (curses.COLOR_BLACK, curses.COLOR_CYAN),
+    WARN:       (curses.COLOR_YELLOW, curses.COLOR_BLUE),
+    OK:         (curses.COLOR_GREEN, curses.COLOR_BLUE),
+    DIM:        (curses.COLOR_WHITE, curses.COLOR_BLUE),
+    DIALOG:     (curses.COLOR_WHITE, curses.COLOR_BLUE),
+    STATUS:     (curses.COLOR_WHITE, curses.COLOR_BLACK),
+    SHADOW:     (curses.COLOR_BLACK, curses.COLOR_BLACK),
+}
+
+_using_256 = False
 
 
 def init_colors() -> None:
+    global _using_256
     curses.start_color()
-    curses.use_default_colors()
-    curses.init_pair(FIELD, curses.COLOR_CYAN, curses.COLOR_BLUE)
-    curses.init_pair(PANEL, curses.COLOR_WHITE, curses.COLOR_BLUE)
-    curses.init_pair(FRAME, curses.COLOR_CYAN, curses.COLOR_BLUE)
-    curses.init_pair(SELECT, curses.COLOR_BLACK, curses.COLOR_CYAN)
-    curses.init_pair(SELECT_DIM, curses.COLOR_WHITE, curses.COLOR_BLACK)
-    curses.init_pair(KEYBAR_N, curses.COLOR_WHITE, curses.COLOR_BLACK)
-    curses.init_pair(KEYBAR_L, curses.COLOR_BLACK, curses.COLOR_CYAN)
-    curses.init_pair(TITLE, curses.COLOR_BLACK, curses.COLOR_CYAN)
-    curses.init_pair(WARN, curses.COLOR_YELLOW, curses.COLOR_BLUE)
-    curses.init_pair(OK, curses.COLOR_GREEN, curses.COLOR_BLUE)
-    curses.init_pair(DIM, curses.COLOR_CYAN, curses.COLOR_BLUE)
-    curses.init_pair(DIALOG, curses.COLOR_WHITE, curses.COLOR_BLUE)
+    try:
+        curses.use_default_colors()
+    except curses.error:
+        pass
+
+    _using_256 = curses.COLORS >= 256
+    table = _PAIRS_256 if _using_256 else _PAIRS_8
+    for pair, (fg, bg) in table.items():
+        try:
+            curses.init_pair(pair, fg, bg)
+        except curses.error:
+            # A terminal that claims 256 colours but refuses the pair: fall
+            # back rather than crash into a monochrome mess.
+            curses.init_pair(pair, *_PAIRS_8[pair])
 
 
 def attr(pair: int, bold: bool = False) -> int:
@@ -91,8 +161,12 @@ def fill(win, y: int, x: int, h: int, w: int, a: int) -> None:
 
 
 def shadow(win, y: int, x: int, h: int, w: int) -> None:
-    """A dropped shadow, so dialogs read as floating above the panels."""
-    dark = attr(DIM)
+    """A dropped shadow, so dialogs read as floating above the panels.
+
+    Black on black. Drawing this in DIM painted navy spaces onto a navy field,
+    which is to say it drew nothing at all.
+    """
+    dark = attr(SHADOW)
     for i in range(1, h):
         put(win, y + i, x + w, "  ", dark)
     put(win, y + h, x + 2, " " * w, dark)

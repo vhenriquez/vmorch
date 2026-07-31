@@ -166,8 +166,8 @@ class App:
         self._draw_boxes(1, 0, panel_h, lw)
         self._draw_detail(1, lw + 1, panel_h, rw)
 
-        put(stdscr, h - 3, 0, " " * w, attr(ui.PANEL))
-        put(stdscr, h - 3, 1, self.status[: w - 2], attr(ui.PANEL, bold=True))
+        put(stdscr, h - 3, 0, " " * w, attr(ui.STATUS))
+        put(stdscr, h - 3, 1, self.status[: w - 2], attr(ui.STATUS, bold=True))
 
         hint = "Tab switch · Enter ssh · Space start/stop"
         put(stdscr, h - 2, 0, " " * w, attr(ui.FIELD))
@@ -702,6 +702,9 @@ def main() -> int:
         curses.curs_set(0)
         stdscr.keypad(True)
         ui.init_colors()
+        # Paint the default background too, so any cell we never write to
+        # matches the field instead of showing the terminal's own colours.
+        stdscr.bkgd(" ", ui.attr(ui.PANEL))
         App(stdscr).loop()
 
     try:
