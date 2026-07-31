@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import boxes, config, images, network, spec as spec_mod, virsh
+from . import boxes, config, images, network, snapshots, spec as spec_mod, virsh
 from .spec import BoxSpec
 
 
@@ -161,6 +161,31 @@ def cmd_revoke(args) -> None:
     print(f"revoked {args.service} from {box.name}")
 
 
+def cmd_snapshot(args) -> None:
+    snap = boxes.snapshot(args.name, args.label)
+    print(f"snapshot {snap.index} ({snap.label}) created")
+    kept = boxes.list_snapshots(args.name)
+    print(f"  {len(kept)}/{config.MAX_SNAPSHOT_LAYERS} layers: "
+          f"{', '.join(str(s.index) for s in kept)}")
+    print("  note: snapshots do NOT cover shared folders. Anything the agent")
+    print("        wrote into an rw share is already on the host and stays.")
+
+
+def cmd_snapshots(args) -> None:
+    snaps = boxes.list_snapshots(args.name)
+    if not snaps:
+        print("no snapshots")
+        return
+    for s in snaps:
+        print(f"  {s.index:>3}  {s.created}  {s.label}")
+
+
+def cmd_rollback(args) -> None:
+    snap = boxes.rollback(args.name, args.index)
+    print(f"rolled back to {snap.index} ({snap.label})")
+    print("  shared folders were NOT rolled back.")
+
+
 def cmd_net(args) -> None:
     created = network.ensure_base()
     print(f"management network {config.MGMT_NET}: "
@@ -243,6 +268,20 @@ def build_parser() -> argparse.ArgumentParser:
     rv.add_argument("service")
     rv.set_defaults(func=cmd_revoke)
 
+    sn = sub.add_parser("snapshot", help="freeze the box's disk state")
+    sn.add_argument("name")
+    sn.add_argument("label", nargs="?")
+    sn.set_defaults(func=cmd_snapshot)
+
+    sl = sub.add_parser("snapshots", help="list snapshots")
+    sl.add_argument("name")
+    sl.set_defaults(func=cmd_snapshots)
+
+    rb = sub.add_parser("rollback", help="rewind to a snapshot")
+    rb.add_argument("name")
+    rb.add_argument("index", type=int)
+    rb.set_defaults(func=cmd_rollback)
+
     lg = sub.add_parser("logs", help="show a box's console log")
     lg.add_argument("name")
     lg.add_argument("-n", "--lines", type=int, default=40)
@@ -259,7 +298,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args.func(args)
     except (boxes.BoxError, images.ImageError, spec_mod.SpecError,
-            virsh.VirshError) as exc:
+            snapshots.SnapshotError, virsh.VirshError) as exc:
         _die(str(exc))
     return 0
 

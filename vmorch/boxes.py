@@ -14,7 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import (alloc, cloudinit, config, domain, guest, hostaccess, images,
-               network, services, spec as spec_mod, sshconf, virsh)
+               network, services, snapshots, spec as spec_mod, sshconf,
+               virsh)
 from .spec import BoxSpec
 
 
@@ -112,6 +113,10 @@ def _create_overlay(box_spec: BoxSpec, base: Path) -> Path:
          str(disk), box_spec.disk],
         check=True, capture_output=True,
     )
+    # 0660, not the qemu-img default 0644: with an ACL present the group bits
+    # are the mask, and a r-- mask caps libvirt-qemu's rwx entry at read-only,
+    # so qemu could not write its own disk.
+    disk.chmod(0o660)
     return disk
 
 
@@ -273,6 +278,28 @@ def share(name: str, host_path: Path, tag: str | None = None,
         _wait_reachable(name)
         guest.mount_folder(name, folder)
     return box
+
+
+def snapshot(name: str, label: str | None = None):
+    """Freeze the box's current disk state. Requires the box to be stopped."""
+    box = load(name)
+    if box.state == "running":
+        raise BoxError(
+            f"stop {name} first: `vm stop {name}`. Snapshotting a running box "
+            "means a crash-consistent image at best."
+        )
+    return snapshots.create(box_dir(name), disk_path(name), label)
+
+
+def rollback(name: str, index: int):
+    box = load(name)
+    if box.state == "running":
+        raise BoxError(f"stop {name} first: `vm stop {name}`")
+    return snapshots.rollback(box_dir(name), disk_path(name), index)
+
+
+def list_snapshots(name: str):
+    return snapshots.load_all(box_dir(name))
 
 
 def grant_service(name: str, svc_name: str, host_port: int, guest_port: int,

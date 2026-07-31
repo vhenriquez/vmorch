@@ -145,7 +145,14 @@ def build(spec: BoxSpec, disk_path: str, mac: str, wan_mac: str, cid: int,
 
     <disk type='file' device='disk'>
       <driver name='qemu' type='qcow2' discard='unmap'/>
-      <source file='{disk_path}'/>
+      <!-- relabel='no' keeps the whole backing chain owned by the box's owner.
+           Otherwise libvirt chowns every layer to libvirt-qemu and leaves it
+           that way, and snapshot pruning - which rebases those layers with
+           qemu-img as the owner - fails with "Permission denied". qemu reaches
+           them through the ACL on the state directory instead. -->
+      <source file='{disk_path}'>
+        <seclabel model='dac' relabel='no'/>
+      </source>
       <target dev='vda' bus='virtio'/>
     </disk>
 {seed}
