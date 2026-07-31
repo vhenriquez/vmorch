@@ -55,7 +55,18 @@ CID_FIRST = 100
 # live on NVMe or every box is slow for its whole life. Only the cold download
 # archive goes on spinning disk.
 
-STATE_DIR = Path.home() / ".local" / "share" / "vmorch"   # NVMe
+# NOT under ~/.local, and not anywhere hidden. Ubuntu's AppArmor profile for
+# virt-aa-helper carries:
+#
+#     audit deny @{HOME}/.* mrwkl,
+#     audit deny @{HOME}/.*/** mrwkl,
+#     @{HOME}/** r,
+#
+# virt-aa-helper is what generates each domain's AppArmor profile, so if it
+# cannot read a disk image, qemu never gets permission for it and the box fails
+# to start with a bare "Permission denied" that looks like a DAC problem and is
+# not. Any dot-directory under $HOME is off limits; a visible one is fine.
+STATE_DIR = Path.home() / "vmorch"                        # NVMe, non-hidden
 BOXES_DIR = STATE_DIR / "boxes"
 BASES_DIR = STATE_DIR / "bases"                            # golden images, NVMe
 ALLOC_FILE = STATE_DIR / "allocations.json"
@@ -77,7 +88,12 @@ DEFAULT_CPUS = 4
 DEFAULT_MEMORY = "8G"
 DEFAULT_DISK = "40G"
 DEFAULT_USER = "agent"          # one shared agent user across all boxes
-DEFAULT_IMAGE = "debian-12"
+# Ubuntu, not Debian. The debian-12-genericcloud image was tested on 2026-07-31
+# and cloud-init never runs on it: zero cloud-init units in the boot, hostname
+# left at "localhost", and ssh.service fails because no host keys are generated.
+# The identical seed ISO drives Ubuntu 24.04 correctly, so the pipeline is fine
+# and the image is not. See the catalogue note in images.py.
+DEFAULT_IMAGE = "ubuntu-24.04"
 
 # Snapshot layers above the box overlay. Creating a 4th commits the oldest down.
 MAX_SNAPSHOT_LAYERS = 3

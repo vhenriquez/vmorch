@@ -20,6 +20,8 @@ Filters:
 
 from __future__ import annotations
 
+import re
+
 from . import config, virsh
 
 MGMT_NET_XML = f"""<network>
@@ -34,6 +36,20 @@ MGMT_NET_XML = f"""<network>
   </ip>
 </network>
 """
+
+
+def nat_gateway() -> str:
+    """The NAT network's gateway address, read from libvirt.
+
+    Discovered rather than hardcoded: this is where an internet-enabled box's
+    DNS server lives, and it must be carved out of the RFC1918 drop by its real
+    address, not an assumed one.
+    """
+    xml = virsh.run("net-dumpxml", config.NAT_NET)
+    match = re.search(r"<ip address='([^']+)'", xml)
+    if not match:
+        raise RuntimeError(f"no <ip> in network {config.NAT_NET}")
+    return match.group(1)
 
 
 def _wan_filter_xml(allow_lan: bool) -> str:
@@ -56,6 +72,13 @@ def _wan_filter_xml(allow_lan: bool) -> str:
     else:
         # Priorities are explicit. The accepts must outrank the drops; relying
         # on document order here would be a latent ordering bug.
+        # The DNS carve-out must name the NAT gateway, NOT the management
+        # gateway. An internet-enabled box gets its resolver from the NAT
+        # network's dnsmasq, and that address is itself RFC1918 -- so without
+        # this exact exception the box has working internet and resolves
+        # nothing. Verified: the isolated management network's dnsmasq does not
+        # forward upstream, so pointing guests there instead would not work.
+        gw = nat_gateway()
         carve_outs = [
             "  <!-- Carve-outs FIRST (priority 100): without these the box has",
             "       'internet' but cannot get an address or resolve a name. -->",
@@ -63,18 +86,22 @@ def _wan_filter_xml(allow_lan: bool) -> str:
             "    <udp dstportstart='67' dstportend='68'/>",
             "  </rule>",
             "  <rule action='accept' direction='out' priority='100'>",
-            f"    <udp dstipaddr='{config.MGMT_GATEWAY}' dstportstart='53'/>",
+            f"    <udp dstipaddr='{gw}' dstportstart='53'/>",
             "  </rule>",
             "  <rule action='accept' direction='out' priority='100'>",
-            f"    <tcp dstipaddr='{config.MGMT_GATEWAY}' dstportstart='53'/>",
+            f"    <tcp dstipaddr='{gw}' dstportstart='53'/>",
             "  </rule>",
         ]
+        # <all>, not <ip>. Tested 2026-07-31: an <ip> drop blocks TCP to the LAN
+        # but lets ICMP straight through, so the box could still ping the
+        # router. <all> matches every protocol, which is what "no LAN" has to
+        # mean -- a rule that stops connections but not probes is not isolation.
         drops = ["  <!-- Then drop private space (priority 200) -->"]
         for cidr in config.PRIVATE_RANGES:
             addr, prefix = cidr.split("/")
             drops += [
                 "  <rule action='drop' direction='out' priority='200'>",
-                f"    <ip dstipaddr='{addr}' dstipmask='{prefix}'/>",
+                f"    <all dstipaddr='{addr}' dstipmask='{prefix}'/>",
                 "  </rule>",
             ]
         rules = "\n".join(carve_outs + drops)
@@ -92,24 +119,32 @@ def _wan_filter_xml(allow_lan: bool) -> str:
 MGMT_FILTER_XML = f"""<filter name='vmorch-mgmt-filter' chain='root'>
   <filterref filter='clean-traffic'/>
 
-  <!-- Allow DHCP and DNS to the bridge, or the box never gets an address. -->
+  <!-- Allow DHCP, or the box never gets an address. -->
   <rule action='accept' direction='out' priority='100'>
     <udp dstportstart='67' dstportend='68'/>
   </rule>
-  <rule action='accept' direction='out' priority='100'>
-    <udp dstipaddr='{config.MGMT_GATEWAY}' dstportstart='53'/>
+
+  <!-- Replies to connections the HOST opened, ssh above all.
+       Without this the guest->host drop below also severs the management
+       session: the guest's SSH replies are addressed to the host and match the
+       drop. Locked us out of a running box exactly once. -->
+  <rule action='accept' direction='out' priority='150'>
+    <tcp state='ESTABLISHED'/>
+  </rule>
+  <rule action='accept' direction='out' priority='150'>
+    <udp state='ESTABLISHED'/>
   </rule>
 
-  <!-- Block everything else aimed at the host itself. Service grants are
-       added per box at higher priority than this. -->
+  <!-- Block guest-INITIATED traffic to the host. Per-box service grants are
+       inserted above this priority. -->
   <rule action='drop' direction='out' priority='500'>
-    <ip dstipaddr='{config.MGMT_GATEWAY}' dstipmask='32'/>
+    <all dstipaddr='{config.MGMT_GATEWAY}' dstipmask='32'/>
   </rule>
 
   <!-- Boxes cannot reach each other. Belt and braces alongside the
        <port isolated='yes'/> on the interface itself. -->
   <rule action='drop' direction='out' priority='500'>
-    <ip dstipaddr='{config.MGMT_SUBNET.split('/')[0]}' dstipmask='24'/>
+    <all dstipaddr='{config.MGMT_SUBNET.split('/')[0]}' dstipmask='24'/>
   </rule>
 </filter>
 """
@@ -130,10 +165,35 @@ def ensure_mgmt_network() -> bool:
     return created
 
 
+def _filter_uuid(name: str) -> str | None:
+    """The UUID libvirt already has for this filter, if any."""
+    try:
+        xml = virsh.run("nwfilter-dumpxml", name)
+    except virsh.VirshError:
+        return None
+    match = re.search(r"<uuid>([^<]+)</uuid>", xml)
+    return match.group(1) if match else None
+
+
+def _define_filter(xml: str) -> None:
+    """Define or update a filter.
+
+    libvirt refuses to redefine an existing filter unless the XML carries its
+    current UUID, so we splice it in. Without this, ensure_filters() works
+    exactly once and fails on every subsequent run -- and rule changes could
+    never be rolled out to an existing host.
+    """
+    name = re.search(r"<filter name='([^']+)'", xml).group(1)
+    uuid = _filter_uuid(name)
+    if uuid and "<uuid>" not in xml:
+        xml = xml.replace(">", f">\n  <uuid>{uuid}</uuid>", 1)
+    virsh.define_nwfilter(xml)
+
+
 def ensure_filters() -> None:
-    virsh.define_nwfilter(MGMT_FILTER_XML)
-    virsh.define_nwfilter(_wan_filter_xml(allow_lan=True))
-    virsh.define_nwfilter(_wan_filter_xml(allow_lan=False))
+    _define_filter(MGMT_FILTER_XML)
+    _define_filter(_wan_filter_xml(allow_lan=True))
+    _define_filter(_wan_filter_xml(allow_lan=False))
 
 
 def reserve_address(name: str, mac: str, ip: str) -> None:
@@ -145,8 +205,11 @@ def reserve_address(name: str, mac: str, ip: str) -> None:
             host_xml, "--live", "--config", "--parent-index", "0",
         )
     except virsh.VirshError as exc:
-        # Already reserved is success, not failure: ensure_* is idempotent.
-        if "already exists" not in exc.stderr:
+        # Already reserved is success, not failure: reservations outlive the
+        # boxes that use them (allocations are never recycled), so re-creating
+        # a box under an old name must not trip over its own reservation.
+        benign = ("already exists", "existing dhcp host entry")
+        if not any(msg in exc.stderr for msg in benign):
             raise
 
 

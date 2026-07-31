@@ -31,6 +31,18 @@ class Allocation:
     cid: int
     released: bool = False   # tombstone: box gone, identifiers still burned
 
+    @property
+    def wan_mac(self) -> str:
+        """MAC for the internet NIC, derived from the management one.
+
+        Derived rather than stored so that existing ledgers keep loading -- no
+        migration, no schema bump. It has to be predictable at all because
+        cloud-init's network config matches interfaces by MAC, and letting
+        libvirt auto-generate this one would leave nothing to match against.
+        """
+        head, tail = self.mac.rsplit(":", 2)[0], self.mac.rsplit(":", 1)[1]
+        return f"{head}:02:{tail}"
+
 
 class AllocationError(RuntimeError):
     pass
