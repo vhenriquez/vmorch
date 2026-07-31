@@ -9,6 +9,26 @@ public internet. Nothing else.
 Design notes live alongside this repo at
 the design notes.
 
+## Two front ends
+
+`./vmtui` is a Norton Commander style control panel — two panels, Tab between
+them, function keys along the bottom. Everything the CLI does is reachable from
+it, and F9 lists every action with its shortcut.
+
+```
+╔════════ Boxes (2) ════════╗ ┌──────── Box: agent-test ────────┐
+║ Name        State   Addr  ║ │ ● running                       │
+║ ● agent-net running .11   ║ │ Folders (1)                     │
+║ ● agent-tes running .10   ║ │   [ro] notes   /srv/notes│
+╚═══════════════════════════╝ └─────────────────────────────────┘
+1Help 2Snap 3View 4Edit 5Share 6Srvc 7New 8Del 9Menu 10Quit
+```
+
+Left panel = boxes, right panel = that box's grants. F8 is contextual: on the
+left it destroys a box, on the right it revokes the one folder or service under
+the cursor. Enter on a box opens a real ssh session; Enter on a snapshot rolls
+back to it.
+
 ## Quick start
 
 ```bash
