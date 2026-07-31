@@ -7,6 +7,8 @@ exists. That is what separates this from a one-shot `virt-install` command line.
 
 from __future__ import annotations
 
+import getpass
+import os
 import shutil
 import subprocess
 import time
@@ -82,19 +84,68 @@ def console_log(name: str) -> Path:
     return box_dir(name) / "console.log"
 
 
-def _ensure_console_log(name: str) -> Path:
-    """Pre-create the console log so its owner can actually read it.
+#: Trim the console log past this, keeping the tail. The domain XML uses
+#: append='on' so history survives restarts, which would otherwise grow without
+#: bound on a box that lives for months.
+CONSOLE_MAX_BYTES = 4 * 1024 * 1024
+CONSOLE_KEEP_BYTES = 512 * 1024
 
-    libvirtd creates this file itself as root:root 0600 -- and a 0600 creation
-    mode zeroes the ACL mask, so a default ACL cannot rescue it either. If the
-    file already exists libvirt appends instead of creating, so making it here
-    with a sane mode is what keeps `vm logs` working at all.
+
+def _ensure_console_log(name: str) -> Path:
+    """Pre-create the console log, owned by us, before libvirt opens it.
+
+    This is load-bearing. The domain uses <console type='pty'> with a <log>
+    element, and libvirt *appends* to that file rather than creating it -- so a
+    file we make first keeps our ownership and stays readable.
+
+    A file libvirt creates itself instead comes out root:root 0600, which is
+    how this went wrong before: the owner of a box could not read its own boot
+    output. Recreating the file here also repairs a box that still carries a
+    stale root-owned log from that era.
     """
     log = console_log(name)
     log.parent.mkdir(parents=True, exist_ok=True)
+
+    if log.exists() and not os.access(log, os.R_OK):
+        # A root-owned leftover. We cannot chown it, but we own the directory,
+        # so replacing it is both possible and the only way to fix the box.
+        try:
+            log.unlink()
+        except OSError:
+            return log
+
     if not log.exists():
         log.touch(mode=0o644)
+    elif log.stat().st_size > CONSOLE_MAX_BYTES:
+        tail = log.read_bytes()[-CONSOLE_KEEP_BYTES:]
+        log.write_bytes(b"[... earlier console output trimmed ...]\n" + tail)
+
     return log
+
+
+#: Disk layers need the group bits set. With an ACL present those bits ARE the
+#: mask, and a r-- mask silently caps libvirt-qemu's rwx entry at read-only --
+#: qemu then cannot write its own disk and the box fails to start with a bare
+#: "Permission denied".
+DISK_MODE = 0o660
+
+
+def _ensure_disk_perms(name: str) -> None:
+    """Repair permissions on a box's whole backing chain before starting it.
+
+    Done on every start, not only at creation, because boxes made by an earlier
+    version carry a 0644 disk whose ACL mask blocks qemu. Fixing it here means
+    an existing box heals itself rather than needing to be rebuilt.
+    """
+    targets = [disk_path(name), *(box_dir(name) / "snapshots").glob("*.qcow2")]
+    for path in targets:
+        try:
+            if path.exists() and path.owner() == getpass.getuser():
+                if path.stat().st_mode & 0o070 != 0o060:
+                    path.chmod(DISK_MODE)
+        except (OSError, KeyError):
+            # Not ours to fix; let libvirt report the real error on start.
+            continue
 
 
 def _create_overlay(box_spec: BoxSpec, base: Path) -> Path:
@@ -113,10 +164,7 @@ def _create_overlay(box_spec: BoxSpec, base: Path) -> Path:
          str(disk), box_spec.disk],
         check=True, capture_output=True,
     )
-    # 0660, not the qemu-img default 0644: with an ACL present the group bits
-    # are the mask, and a r-- mask caps libvirt-qemu's rwx entry at read-only,
-    # so qemu could not write its own disk.
-    disk.chmod(0o660)
+    disk.chmod(DISK_MODE)   # see DISK_MODE: the ACL mask depends on it
     return disk
 
 
@@ -197,6 +245,8 @@ def apply(name: str) -> Box:
     _regenerate_ssh()
 
     if was_running:
+        _ensure_console_log(name)
+        _ensure_disk_perms(name)
         virsh.run("start", box.spec.domain)
 
     return load(name)
@@ -205,6 +255,7 @@ def apply(name: str) -> Box:
 def start(name: str) -> None:
     box = load(name)
     _ensure_console_log(name)
+    _ensure_disk_perms(name)
     if box.state != "running":
         virsh.run("start", box.spec.domain)
 

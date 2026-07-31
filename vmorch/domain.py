@@ -165,18 +165,24 @@ def build(spec: BoxSpec, disk_path: str, mac: str, wan_mac: str, cid: int,
       <cid auto='no' address='{cid}'/>
     </vsock>
 
-    <!-- Serial console logged to a file. `virsh console` needs a controlling
-         TTY, which rules it out of scripts and automation; a log file is
-         readable at any time and survives the box being destroyed, which is
-         exactly when you want to know what it said. -->
-    <console type='file'>
-      <!-- relabel='no' stops libvirt chowning this to root:root 0600 on every
-           start, which would make the box's own console log unreadable to the
-           person who owns the box. Access for qemu comes from the ACL on the
-           state directory instead. -->
-      <source path='{console_log}'>
-        <seclabel model='dac' relabel='no'/>
-      </source>
+    <!-- Serial console on a pty, with libvirt tee-ing it to a log file.
+
+         NOT <console type='file'>. That makes the log file libvirt's own
+         chardev *source*, which libvirtd creates as root:root 0600 - leaving
+         the owner of the box unable to read their own boot output. A
+         <seclabel relabel='no'/> does not help: it only controls whether
+         libvirt then chowns the file to the qemu user, so the file stays root
+         either way. Verified directly, both with and without it.
+
+         <log> is a different path: libvirt opens it for append rather than
+         creating it, so a file we pre-create keeps our ownership and stays
+         readable. boxes._ensure_console_log makes it before every start.
+
+         append='on' keeps history across restarts, which is when you most want
+         it. Using a pty for the console itself also makes `virsh console`
+         work, which <console type='file'> does not. -->
+    <console type='pty'>
+      <log file='{console_log}' append='on'/>
       <target type='serial' port='0'/>
     </console>
 
