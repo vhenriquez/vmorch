@@ -82,7 +82,8 @@ def _interfaces_xml(spec: BoxSpec, mac: str, wan_mac: str) -> str:
 
 
 def build(spec: BoxSpec, disk_path: str, mac: str, wan_mac: str, cid: int,
-          console_log: str, seed_iso: str | None = None) -> str:
+          console_log: str, seed_iso: str | None = None,
+          uuid: str | None = None) -> str:
     """Render the complete domain XML for a box."""
     seed = ""
     if seed_iso:
@@ -98,8 +99,13 @@ def build(spec: BoxSpec, disk_path: str, mac: str, wan_mac: str, cid: int,
     if filesystems:
         filesystems += "\n"
 
+    # Redefining an existing domain requires its current UUID: libvirt rejects
+    # the XML outright otherwise, which would make `vm apply` work exactly once
+    # -- at creation -- and fail on every reconfiguration after that.
+    uuid_line = f"\n  <uuid>{uuid}</uuid>" if uuid else ""
+
     return f"""<domain type='kvm'>
-  <name>{spec.domain}</name>
+  <name>{spec.domain}</name>{uuid_line}
   <memory unit='KiB'>{_memory_kib(spec.memory)}</memory>
   <currentMemory unit='KiB'>{_memory_kib(spec.memory)}</currentMemory>
   <vcpu placement='static'>{spec.cpus}</vcpu>

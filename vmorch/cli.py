@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from . import boxes, config, images, network, spec as spec_mod, virsh
 from .spec import BoxSpec
@@ -118,6 +119,33 @@ def cmd_rm(args) -> None:
     print(f"{args.name} destroyed")
 
 
+def cmd_share(args) -> None:
+    # rw is opt-in at the CLI as well as in the spec parser. Two independent
+    # layers have to be wrong before a host folder becomes writable.
+    mode = "rw" if args.rw else "ro"
+    box = boxes.share(args.name, Path(args.path), tag=args.tag, mode=mode)
+    tag = args.tag or Path(args.path).expanduser().resolve().name
+    print(f"shared {args.path} -> /mnt/{tag} [{mode}] on {box.name}")
+    if mode == "rw":
+        print("  !! WRITABLE: an agent with root in this box can modify that "
+              "host path.")
+
+
+def cmd_unshare(args) -> None:
+    box = boxes.unshare(args.name, args.tag)
+    print(f"unshared {args.tag} from {box.name}")
+
+
+def cmd_logs(args) -> None:
+    log = boxes.console_log(args.name)
+    if not log.exists():
+        _die(f"no console log for {args.name}")
+    text = log.read_text(errors="replace")
+    lines = text.splitlines()
+    for line in lines[-args.lines:]:
+        print(line)
+
+
 def cmd_net(args) -> None:
     created = network.ensure_base()
     print(f"management network {config.MGMT_NET}: "
@@ -172,6 +200,24 @@ def build_parser() -> argparse.ArgumentParser:
     rm.add_argument("name")
     rm.add_argument("--yes", action="store_true")
     rm.set_defaults(func=cmd_rm)
+
+    sh = sub.add_parser("share", help="grant a box a host folder (read-only)")
+    sh.add_argument("name")
+    sh.add_argument("path")
+    sh.add_argument("--tag", help="mount tag; defaults to the directory name")
+    sh.add_argument("--rw", action="store_true",
+                    help="grant WRITE access (default is read-only)")
+    sh.set_defaults(func=cmd_share)
+
+    un = sub.add_parser("unshare", help="revoke a shared folder")
+    un.add_argument("name")
+    un.add_argument("tag")
+    un.set_defaults(func=cmd_unshare)
+
+    lg = sub.add_parser("logs", help="show a box's console log")
+    lg.add_argument("name")
+    lg.add_argument("-n", "--lines", type=int, default=40)
+    lg.set_defaults(func=cmd_logs)
 
     sub.add_parser("net", help="ensure the management network exists").set_defaults(
         func=cmd_net)

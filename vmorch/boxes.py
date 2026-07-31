@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import (alloc, cloudinit, config, domain, hostaccess, images, network,
-               spec as spec_mod, sshconf, virsh)
+from . import (alloc, cloudinit, config, domain, guest, hostaccess, images,
+               network, spec as spec_mod, sshconf, virsh)
 from .spec import BoxSpec
 
 
@@ -176,6 +177,7 @@ def apply(name: str) -> Box:
         cid=allocation.cid,
         console_log=str(box_dir(name) / "console.log"),
         seed_iso=str(box_dir(name) / "seed.iso"),
+        uuid=virsh.domain_uuid(box.spec.domain),
     )
     (box_dir(name) / "domain.xml").write_text(xml)
 
@@ -221,6 +223,65 @@ def destroy(name: str, keep_disk: bool = False) -> None:
 
     alloc.release(name)
     _regenerate_ssh()
+
+
+def _wait_reachable(name: str, timeout: int = 120) -> None:
+    """Block until the box answers SSH, so reconfiguration does not race boot."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if guest.reachable(name):
+            return
+        time.sleep(3)
+    raise BoxError(f"{name} did not become reachable over ssh within {timeout}s")
+
+
+def save_spec(box_spec: BoxSpec) -> None:
+    spec_path(box_spec.name).write_text(spec_mod.dump(box_spec))
+
+
+def share(name: str, host_path: Path, tag: str | None = None,
+          mode: str = "ro") -> Box:
+    """Grant a box access to a host folder, then apply.
+
+    Read-only unless the caller explicitly asks otherwise -- the CLI makes rw
+    opt-in, and spec parsing independently defaults to ro, so a slip in either
+    layer still fails closed.
+    """
+    box = load(name)
+    resolved = host_path.expanduser().resolve()
+    if not resolved.is_dir():
+        raise BoxError(f"not a directory: {resolved}")
+
+    tag = tag or resolved.name
+    if any(f.tag == tag for f in box.spec.folders):
+        raise BoxError(f"box {name!r} already shares tag {tag!r}")
+
+    entry = {"host": str(resolved), "tag": tag, "mode": mode}
+    folder = spec_mod._parse_folder(entry, len(box.spec.folders) + 1)
+    box.spec.folders.append(folder)
+    save_spec(box.spec)
+    box = apply(name)
+
+    # cloud-init already ran on this box, so the mount will not appear by
+    # itself. Do it over SSH -- this is the reconfigure path, not the create
+    # path.
+    if box.state == "running":
+        _wait_reachable(name)
+        guest.mount_folder(name, folder)
+    return box
+
+
+def unshare(name: str, tag: str) -> Box:
+    box = load(name)
+    remaining = [f for f in box.spec.folders if f.tag != tag]
+    if len(remaining) == len(box.spec.folders):
+        raise BoxError(f"box {name!r} does not share tag {tag!r}")
+    if virsh.domain_state(box.spec.domain) == "running" and guest.reachable(name):
+        guest.unmount_folder(name, tag)
+
+    box.spec.folders = remaining
+    save_spec(box.spec)
+    return apply(name)
 
 
 def _regenerate_ssh() -> None:

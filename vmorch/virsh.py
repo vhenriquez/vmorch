@@ -72,6 +72,14 @@ def list_our_domains() -> list[str]:
     return [d for d in list_domains() if d.startswith(config.DOMAIN_PREFIX)]
 
 
+def domain_uuid(name: str) -> str | None:
+    """The UUID libvirt holds for a domain, if it exists."""
+    try:
+        return run("domuuid", name).strip() or None
+    except VirshError:
+        return None
+
+
 def network_exists(name: str) -> bool:
     try:
         run("net-info", name)
