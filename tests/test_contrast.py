@@ -57,6 +57,7 @@ NAMES = {
     ui.TITLE: "title bar", ui.WARN: "warning / writable share",
     ui.OK: "running marker", ui.DIM: "dim text", ui.DIALOG: "dialog text",
     ui.STATUS: "status line", ui.SHADOW: "dialog shadow",
+    ui.ERROR: "failed unit (console)",
 }
 
 

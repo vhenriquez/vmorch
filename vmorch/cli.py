@@ -6,7 +6,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import boxes, config, images, network, snapshots, spec as spec_mod, virsh
+from . import (boxes, config, consoletext, images, network, snapshots,
+               spec as spec_mod, virsh)
 from .spec import BoxSpec
 
 
@@ -142,9 +143,20 @@ def cmd_logs(args) -> None:
     if not log.exists():
         _die(f"no console log for {args.name}")
     text = log.read_text(errors="replace")
-    lines = text.splitlines()
-    for line in lines[-args.lines:]:
+
+    # On a terminal the guest's own ANSI colour renders correctly and is worth
+    # keeping. Piped to a file or another program it is just noise, so strip it
+    # there -- the same convention as `ls --color=auto`. --raw and --clean force
+    # either way.
+    strip = args.clean or (not sys.stdout.isatty() and not args.raw)
+    if strip:
+        text = consoletext.sanitize(text)
+
+    for line in text.splitlines()[-args.lines:]:
         print(line)
+
+    if strip and sys.stdout.isatty():
+        print(f"\n-- {consoletext.summary(text)}", file=sys.stderr)
 
 
 def cmd_service(args) -> None:
@@ -286,6 +298,10 @@ def build_parser() -> argparse.ArgumentParser:
     lg = sub.add_parser("logs", help="show a box's console log")
     lg.add_argument("name")
     lg.add_argument("-n", "--lines", type=int, default=40)
+    lg.add_argument("--clean", action="store_true",
+                    help="strip terminal control codes even on a tty")
+    lg.add_argument("--raw", action="store_true",
+                    help="keep control codes even when piped")
     lg.set_defaults(func=cmd_logs)
 
     sub.add_parser("net", help="ensure the management network exists").set_defaults(

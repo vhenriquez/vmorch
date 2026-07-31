@@ -30,6 +30,7 @@ DIM = 11         # secondary text
 DIALOG = 12      # dialog interior
 STATUS = 13      # the status line
 SHADOW = 14      # dialog drop shadow
+ERROR = 15       # failed units in a console log
 
 # --------------------------------------------------------------------------
 # Palette
@@ -54,6 +55,8 @@ C_TEXT = 231       # #ffffff  18.0:1 on navy
 C_FRAME = 45       # #00d7ff  10.4:1
 C_DIM = 146        # #afafd7   8.5:1 -- dim to the eye, still far above AAA
 C_WARN = 226       # #ffff00  16.8:1
+C_ERR = 210        # #ff8787   7.8:1 -- a salmon red. Pure red (196) is
+                   #          only 4.5:1 on this navy and fails AAA.
 C_OK = 82          # #5fff00  13.5:1
 C_SEL = 45         # selection bar; black on it is 12.2:1
 C_SEL_DIM = 250    # #bcbcbc  grey bar for the UNfocused panel: reads as
@@ -74,6 +77,7 @@ _PAIRS_256 = {
     DIALOG:     (C_TEXT, C_BG_DLG),
     STATUS:     (C_TEXT, C_BG_STATUS),
     SHADOW:     (C_BLACK, C_BLACK),
+    ERROR:      (C_ERR, C_BG),
 }
 
 # Fallback for 8-colour terminals. Body text is bold white rather than cyan,
@@ -93,6 +97,7 @@ _PAIRS_8 = {
     DIALOG:     (curses.COLOR_WHITE, curses.COLOR_BLUE),
     STATUS:     (curses.COLOR_WHITE, curses.COLOR_BLACK),
     SHADOW:     (curses.COLOR_BLACK, curses.COLOR_BLACK),
+    ERROR:      (curses.COLOR_RED, curses.COLOR_BLUE),
 }
 
 _using_256 = False
@@ -325,8 +330,14 @@ def choose(stdscr, title: str, options: list[tuple[str, object]],
             idx = (idx + 1) % len(labels)
 
 
-def pager(stdscr, title: str, text: str) -> None:
-    """Scrollable read-only view, for console logs and long output."""
+def pager(stdscr, title: str, text: str, line_attr=None,
+          footer: str = "") -> None:
+    """Scrollable read-only view, for console logs and long output.
+
+    `line_attr` is an optional callable taking a line and returning a colour
+    pair id, so a console log can highlight failed units without this module
+    knowing anything about systemd.
+    """
     sh, sw = stdscr.getmaxyx()
     h, w = sh - 4, sw - 6
     y, x, h, w = _centred_box(stdscr, h, w, title)
@@ -338,12 +349,16 @@ def pager(stdscr, title: str, text: str) -> None:
         for i in range(view_h):
             put(stdscr, y + 1 + i, x + 2, " " * (w - 4), attr(DIALOG))
             if top + i < len(lines):
-                put(stdscr, y + 1 + i, x + 2, lines[top + i][: w - 4],
-                    attr(DIALOG))
+                line = lines[top + i]
+                a = attr(line_attr(line), bold=True) if line_attr else attr(DIALOG)
+                put(stdscr, y + 1 + i, x + 2, line[: w - 4], a)
         pos = f" {top + 1}-{min(top + view_h, len(lines))} of {len(lines)} "
         put(stdscr, y + h - 1, x + w - len(pos) - 3, pos, attr(FRAME, bold=True))
-        put(stdscr, y + h - 2, x + 2,
-            "↑↓ PgUp PgDn Home End   Esc close", attr(DIM))
+        hint = "↑↓ PgUp PgDn Home End   Esc close"
+        put(stdscr, y + h - 2, x + 2, hint, attr(DIM))
+        if footer:
+            put(stdscr, y + h - 2, x + len(hint) + 5, footer[: w - len(hint) - 8],
+                attr(WARN, bold=True))
         stdscr.refresh()
 
         k = stdscr.getch()

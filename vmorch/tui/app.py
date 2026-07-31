@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .. import boxes as boxlib
-from .. import config, images, network
+from .. import config, consoletext, images, network
 from ..spec import BoxSpec
 from . import ui
 from .ui import attr, frame, fill, put
@@ -510,7 +510,21 @@ class App:
         except PermissionError:
             ui.error(self.stdscr, f"Cannot read {log} — check the ACL.")
             return
-        ui.pager(self.stdscr, f"Console — {box.name}", text or "(empty)")
+        # Raw console output is a terminal recording: ANSI colour, carriage
+        # returns, stray NULs. Strip the control codes and rebuild the meaning
+        # from the text markers instead.
+        clean = consoletext.sanitize(text)
+        kinds = {
+            consoletext.FAIL: ui.ERROR,
+            consoletext.WARN: ui.WARN,
+            consoletext.OK: ui.OK,
+            consoletext.PLAIN: ui.DIALOG,
+        }
+        ui.pager(
+            self.stdscr, f"Console — {box.name}", clean or "(empty)",
+            line_attr=lambda ln: kinds[consoletext.classify(ln)],
+            footer=consoletext.summary(clean),
+        )
 
     def act_edit(self) -> None:
         box = self.current
