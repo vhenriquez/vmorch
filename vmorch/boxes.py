@@ -8,6 +8,7 @@ exists. That is what separates this from a one-shot `virt-install` command line.
 from __future__ import annotations
 
 import getpass
+import json
 import os
 import shutil
 import subprocess
@@ -148,6 +149,38 @@ def _ensure_disk_perms(name: str) -> None:
             continue
 
 
+def _bytes_of(size: str) -> int:
+    text = size.strip().upper()
+    units = {"G": 1024 ** 3, "M": 1024 ** 2, "K": 1024, "T": 1024 ** 4}
+    if text and text[-1] in units:
+        return int(float(text[:-1]) * units[text[-1]])
+    return int(float(text)) * 1024 ** 3
+
+
+def _check_disk_fits(box_spec: BoxSpec, base: Path) -> None:
+    """Refuse a disk smaller than the image's own partition layout.
+
+    An image's partition table is baked in. Kali's cloud image declares a root
+    partition ending around 25G; give the box a 20G disk and root runs off the
+    end of the device, so the initramfs cannot mount it and the box drops into
+    emergency mode with no ssh and no obvious cause. Caught here, it is one
+    clear sentence instead of an afternoon.
+    """
+    info = json.loads(subprocess.run(
+        ["qemu-img", "info", "--output=json", str(base)],
+        capture_output=True, text=True, check=True,
+    ).stdout)
+    needed = int(info.get("virtual-size", 0))
+    asked = _bytes_of(box_spec.disk)
+    if asked < needed:
+        raise BoxError(
+            f"image {box_spec.image!r} needs at least "
+            f"{needed / 1024**3:.0f}G but --disk is {box_spec.disk}. "
+            "The image's partition table is larger than the disk, so it would "
+            f"boot into emergency mode. Use --disk {needed / 1024**3:.0f}G or more."
+        )
+
+
 def _create_overlay(box_spec: BoxSpec, base: Path) -> Path:
     """Thin copy-on-write overlay over the golden base.
 
@@ -181,6 +214,10 @@ def create(box_spec: BoxSpec, start: bool = True) -> Box:
 
     entry = images.get(box_spec.image)
     base = images.ensure_base(entry)
+
+    # Validate before anything is written. A check that runs after the spec
+    # file exists leaves a half-made box that blocks the corrected retry.
+    _check_disk_fits(box_spec, base)
 
     allocation = alloc.allocate(box_spec.name)
     network.reserve_address(box_spec.name, allocation.mac, allocation.ip)
