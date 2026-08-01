@@ -285,7 +285,7 @@ def destroy(name: str, keep_disk: bool = False) -> None:
     _regenerate_ssh()
 
 
-def _wait_reachable(name: str, timeout: int = 120) -> None:
+def _wait_reachable(name: str, timeout: int = 300) -> None:
     """Block until the box answers SSH, so reconfiguration does not race boot."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -320,15 +320,61 @@ def share(name: str, host_path: Path, tag: str | None = None,
     folder = spec_mod._parse_folder(entry, len(box.spec.folders) + 1)
     box.spec.folders.append(folder)
     save_spec(box.spec)
-    box = apply(name)
 
-    # cloud-init already ran on this box, so the mount will not appear by
-    # itself. Do it over SSH -- this is the reconfigure path, not the create
-    # path.
-    if box.state == "running":
-        _wait_reachable(name)
+    running = box.state == "running"
+
+    if running:
+        # Hot-attach. Rebuilding the domain would reboot the box, and a box
+        # that is busy doing work should not be restarted just to gain a
+        # folder. Every box carries the shared-memory backing from creation so
+        # that this works live.
+        try:
+            virsh.attach_device(box.spec.domain,
+                                domain.filesystem_device_xml(folder),
+                                live=True, persist=True)
+        except virsh.VirshError as exc:
+            # Undo the spec change. A grant recorded but not attached would
+            # show in `vm show` while doing nothing -- the same silent lie the
+            # unimplemented service mechanisms used to tell.
+            box.spec.folders = [f for f in box.spec.folders if f.tag != tag]
+            save_spec(box.spec)
+            if "PCI slot" in exc.stderr:
+                raise BoxError(
+                    f"{name} has no free PCI slots for another share. Boxes "
+                    "created before this was fixed have no spares; restart it "
+                    f"(`vm stop {name} && vm apply {name} && vm start {name}`) "
+                    "to pick up the extra ports."
+                ) from None
+            raise
+        try:
+            guest.mount_folder(name, folder)
+        except guest.GuestError as exc:
+            raise BoxError(
+                f"{name}: the share is attached and saved, but mounting it "
+                f"inside the box failed ({exc}). Run `vm mount {name}` once the "
+                "box is reachable."
+            ) from None
+    else:
+        # Stopped: regenerate the domain so the device is there at next boot.
+        apply(name)
+
+    return load(name)
+
+
+def sync_mounts(name: str) -> list[str]:
+    """Mount every folder the spec grants. Idempotent; safe to re-run.
+
+    The recovery path when a share was configured but not mounted -- a box that
+    was stopped at the time, or an in-guest step that failed. cloud-init only
+    mounts at first boot, so nothing else reconciles this.
+    """
+    box = load(name)
+    if box.state != "running":
+        raise BoxError(f"{name} is {box.state}; start it first")
+    _wait_reachable(name)
+    for folder in box.spec.folders:
         guest.mount_folder(name, folder)
-    return box
+    return [f.tag for f in box.spec.folders]
 
 
 def snapshot(name: str, label: str | None = None):
@@ -405,11 +451,22 @@ def unshare(name: str, tag: str) -> Box:
     remaining = [f for f in box.spec.folders if f.tag != tag]
     if len(remaining) == len(box.spec.folders):
         raise BoxError(f"box {name!r} does not share tag {tag!r}")
-    if virsh.domain_state(box.spec.domain) == "running" and guest.reachable(name):
+    gone = next(f for f in box.spec.folders if f.tag == tag)
+    running = virsh.domain_state(box.spec.domain) == "running"
+
+    if running and guest.reachable(name):
         guest.unmount_folder(name, tag)
 
     box.spec.folders = remaining
     save_spec(box.spec)
+
+    if running:
+        # Detach live, for the same reason share attaches live: revoking a
+        # folder should not reboot a box that is in the middle of something.
+        virsh.detach_device(box.spec.domain,
+                            domain.filesystem_device_xml(gone),
+                            live=True, persist=True)
+        return load(name)
     return apply(name)
 
 

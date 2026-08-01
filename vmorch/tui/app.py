@@ -313,7 +313,7 @@ class App:
         # alphabetically would put a known-broken image first, where pressing
         # Enter through the dialog lands on it.
         entries = sorted(
-            images.CATALOGUE.items(),
+            images.catalogue().items(),
             key=lambda kv: (kv[0] != config.DEFAULT_IMAGE, not kv[1].verified, kv[0]),
         )
         image = ui.choose(
@@ -554,6 +554,8 @@ class App:
             ("View console log              F3", "view"),
             ("Edit box spec                 F4", "edit"),
             ("Image catalogue", "images"),
+            ("Re-mount shared folders", "mount"),
+            ("Build a golden image...", "golden"),
             ("Ensure management network", "net"),
             ("Destroy box                   F8", "del"),
             ("Help                          F1", "help"),
@@ -573,7 +575,7 @@ class App:
             self.status = f"Applied {box.name}"
         elif choice == "images":
             lines = []
-            for k, e in sorted(images.CATALOGUE.items()):
+            for k, e in sorted(images.catalogue().items()):
                 marks = []
                 if e.cached.exists():
                     marks.append("cached")
@@ -582,6 +584,17 @@ class App:
                 lines.append(f"{k:<14} {e.description}\n"
                              f"{'':<14} {', '.join(marks) or 'not downloaded'}")
             ui.pager(self.stdscr, "Image catalogue", "\n".join(lines))
+        elif choice == "mount" and box:
+            res = self.task("Mounting", lambda: boxlib.sync_mounts(box.name))
+            if res is not None:
+                self.status = f"mounted {len(res)} share(s) on {box.name}"
+            self.refresh_boxes()
+        elif choice == "golden":
+            ui.message(self.stdscr, "Golden images",
+                       "Building a golden image boots a temporary box, installs "
+                       "into it and flattens the result. It takes several "
+                       "minutes and is best watched, so run it from the CLI:\n\n"
+                       "  vm golden agent-base --packages tmux,git")
         elif choice == "net":
             res = self.task("Network", network.ensure_base)
             if res is not None:

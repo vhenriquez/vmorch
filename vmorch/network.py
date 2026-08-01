@@ -92,18 +92,27 @@ def _wan_filter_xml(allow_lan: bool) -> str:
             f"    <tcp dstipaddr='{gw}' dstportstart='53'/>",
             "  </rule>",
         ]
-        # <all>, not <ip>. Tested 2026-07-31: an <ip> drop blocks TCP to the LAN
-        # but lets ICMP straight through, so the box could still ping the
-        # router. <all> matches every protocol, which is what "no LAN" has to
-        # mean -- a rule that stops connections but not probes is not isolation.
+        # Per-protocol, NOT <all>. Two findings forced this:
+        #
+        #   <ip> blocks TCP but lets ICMP through, so the box could still ping
+        #   the router -- a rule that stops connections but not probes is not
+        #   isolation.
+        #
+        #   <all> catches ICMP but is implemented in EBTABLES, which has no
+        #   connection tracking. Mixing it with a stateful accept silently loses
+        #   the state match, because the two live in different layers.
+        #
+        # tcp/udp/icmp all land in iptables, where `state` works and every
+        # protocol is covered.
         drops = ["  <!-- Then drop private space (priority 200) -->"]
         for cidr in config.PRIVATE_RANGES:
             addr, prefix = cidr.split("/")
-            drops += [
-                "  <rule action='drop' direction='out' priority='200'>",
-                f"    <all dstipaddr='{addr}' dstipmask='{prefix}'/>",
-                "  </rule>",
-            ]
+            for proto in ("tcp", "udp", "icmp"):
+                drops += [
+                    "  <rule action='drop' direction='out' priority='200'>",
+                    f"    <{proto} dstipaddr='{addr}' dstipmask='{prefix}'/>",
+                    "  </rule>",
+                ]
         rules = "\n".join(carve_outs + drops)
 
     return f"""<filter name='{name}' chain='root'>
@@ -127,24 +136,32 @@ MGMT_FILTER_XML = f"""<filter name='vmorch-mgmt-filter' chain='root'>
   <!-- Replies to connections the HOST opened, ssh above all.
        Without this the guest->host drop below also severs the management
        session: the guest's SSH replies are addressed to the host and match the
-       drop. Locked us out of a running box exactly once. -->
+       drop. Locked us out of a running box twice.
+
+       These MUST stay in the same layer as the drops below. `state` is an
+       iptables feature; an <all> drop is an ebtables rule and never consults
+       conntrack, so pairing the two silently drops established traffic. That
+       is why everything here is tcp/udp/icmp rather than <all>. -->
   <rule action='accept' direction='out' priority='150'>
     <tcp state='ESTABLISHED'/>
   </rule>
   <rule action='accept' direction='out' priority='150'>
     <udp state='ESTABLISHED'/>
   </rule>
-
-  <!-- Block guest-INITIATED traffic to the host. Per-box service grants are
-       inserted above this priority. -->
-  <rule action='drop' direction='out' priority='500'>
-    <all dstipaddr='{config.MGMT_GATEWAY}' dstipmask='32'/>
+  <rule action='accept' direction='out' priority='150'>
+    <icmp state='ESTABLISHED,RELATED'/>
   </rule>
 
-  <!-- Boxes cannot reach each other. Belt and braces alongside the
-       <port isolated='yes'/> on the interface itself. -->
+  <!-- Block guest-INITIATED traffic to the host, and to any other box.
+       Per-box service grants are inserted above this priority. -->
   <rule action='drop' direction='out' priority='500'>
-    <all dstipaddr='{config.MGMT_SUBNET.split('/')[0]}' dstipmask='24'/>
+    <tcp dstipaddr='{config.MGMT_SUBNET.split('/')[0]}' dstipmask='24'/>
+  </rule>
+  <rule action='drop' direction='out' priority='500'>
+    <udp dstipaddr='{config.MGMT_SUBNET.split('/')[0]}' dstipmask='24'/>
+  </rule>
+  <rule action='drop' direction='out' priority='500'>
+    <icmp dstipaddr='{config.MGMT_SUBNET.split('/')[0]}' dstipmask='24'/>
   </rule>
 </filter>
 """

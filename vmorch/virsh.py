@@ -96,6 +96,32 @@ def nwfilter_exists(name: str) -> bool:
         return False
 
 
+def attach_device(domain: str, xml: str, live: bool = True,
+                  persist: bool = True) -> None:
+    """Hot-plug a device. --config makes it survive the next boot too."""
+    flags = (["--live"] if live else []) + (["--config"] if persist else [])
+    _device_op("attach-device", domain, xml, flags)
+
+
+def detach_device(domain: str, xml: str, live: bool = True,
+                  persist: bool = True) -> None:
+    flags = (["--live"] if live else []) + (["--config"] if persist else [])
+    _device_op("detach-device", domain, xml, flags)
+
+
+def _device_op(subcommand: str, domain: str, xml: str, flags: list[str]) -> None:
+    import os
+    import tempfile
+
+    with tempfile.NamedTemporaryFile("w", suffix=".xml", delete=False) as fh:
+        fh.write(xml)
+        path = fh.name
+    try:
+        run(subcommand, domain, path, *flags)
+    finally:
+        os.unlink(path)
+
+
 def define_network(xml: str) -> None:
     _define_from_xml("net-define", xml)
 

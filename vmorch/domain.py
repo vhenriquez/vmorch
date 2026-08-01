@@ -26,12 +26,48 @@ from . import config
 from .spec import BoxSpec
 
 
+#: How many virtiofs shares (and other devices) can be hot-plugged after a box
+#: is created. Each takes one PCIe root port.
+SPARE_PCI_PORTS = 12
+
+
+def _root_ports(count: int) -> str:
+    """The PCIe root plus `count` spare ports hanging off it.
+
+    Indexes have to be explicit and index 0 has to be the pcie-root itself:
+    libvirt rejects the domain outright with "The PCI controller with index='0'
+    must be model='pcie-root'" if the ports are emitted bare.
+    """
+    lines = ["    <controller type='pci' index='0' model='pcie-root'/>"]
+    lines += [
+        f"    <controller type='pci' index='{i}' model='pcie-root-port'/>"
+        for i in range(1, count + 1)
+    ]
+    return "\n".join(lines)
+
+
 def _memory_kib(memory: str) -> int:
     text = memory.strip().upper()
     multipliers = {"G": 1024 * 1024, "M": 1024, "K": 1}
     if text and text[-1] in multipliers:
         return int(float(text[:-1]) * multipliers[text[-1]])
     return int(float(text)) * 1024 * 1024      # bare number means GiB
+
+
+def filesystem_device_xml(folder) -> str:
+    """A single <filesystem> device, for hot-attaching to a running box.
+
+    Adding a share should not reboot the box. Every box carries the shared
+    memory backing from creation precisely so this can be attached live -- see
+    the note at the top of this module.
+    """
+    readonly = "\n  <readonly/>" if folder.readonly else ""
+    return f"""<filesystem type='mount' accessmode='passthrough'>
+  <driver type='virtiofs'/>
+  <source dir='{folder.host}'/>
+  <target dir='{folder.tag}'/>{readonly}
+</filesystem>
+"""
 
 
 def _filesystem_xml(spec: BoxSpec) -> str:
@@ -142,6 +178,14 @@ def build(spec: BoxSpec, disk_path: str, mac: str, wan_mac: str, cid: int,
 
   <devices>
     <emulator>/usr/bin/qemu-system-x86_64</emulator>
+
+    <!-- Spare PCIe root ports, so devices can be hot-plugged later.
+         q35 only auto-provisions enough slots for the devices present at
+         definition time. Without spares, attaching a second virtiofs share to
+         a running box fails with "No more available PCI slots" - and the
+         whole point of the shared-memory backing is that adding a folder
+         should not need a reboot. They cost almost nothing when unused. -->
+{_root_ports(SPARE_PCI_PORTS)}
 
     <disk type='file' device='disk'>
       <driver name='qemu' type='qcow2' discard='unmap'/>

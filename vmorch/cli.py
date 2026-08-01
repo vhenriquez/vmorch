@@ -6,8 +6,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import (boxes, config, consoletext, images, network, snapshots,
-               spec as spec_mod, virsh)
+from . import (boxes, config, consoletext, golden, images, network,
+               snapshots, spec as spec_mod, virsh)
 from .spec import BoxSpec
 
 
@@ -17,10 +17,10 @@ def _die(msg: str) -> None:
 
 
 def cmd_images(args) -> None:
-    for key, entry in sorted(images.CATALOGUE.items()):
+    for key, entry in sorted(images.catalogue().items()):
         mark = "cached" if entry.cached.exists() else "      "
         base = "base" if images.base_path(entry).exists() else "    "
-        flag = "     " if entry.verified else "BROKEN"
+        flag = "local " if entry.local else ("      " if entry.verified else "BROKEN")
         print(f"  {mark} {base} {flag} {key:<14} {entry.description}")
 
 
@@ -199,6 +199,22 @@ def cmd_rollback(args) -> None:
     print("  shared folders were NOT rolled back.")
 
 
+def cmd_mount(args) -> None:
+    tags = boxes.sync_mounts(args.name)
+    print(f"mounted {len(tags)} share(s) on {args.name}: {', '.join(tags) or '-'}")
+
+
+def cmd_golden(args) -> None:
+    packages = args.packages.split(",") if args.packages else None
+    path = golden.build(
+        args.name, from_image=args.image, packages=packages,
+        run=args.run or [], keep_build_box=args.keep_build_box,
+        progress=lambda m: print(f"  {m}"),
+    )
+    print(f"\ngolden image ready: {path}")
+    print(f"use it with:  vm new mybox --image {args.name}")
+
+
 def cmd_net(args) -> None:
     created = network.ensure_base()
     print(f"management network {config.MGMT_NET}: "
@@ -295,6 +311,22 @@ def build_parser() -> argparse.ArgumentParser:
     rb.add_argument("index", type=int)
     rb.set_defaults(func=cmd_rollback)
 
+    mt = sub.add_parser("mount", help="re-mount a box's shared folders")
+    mt.add_argument("name")
+    mt.set_defaults(func=cmd_mount)
+
+    gd = sub.add_parser("golden", help="build a base image with software baked in")
+    gd.add_argument("name", help="name for the new image")
+    gd.add_argument("--image", help=f"source image (default {config.DEFAULT_IMAGE})")
+    gd.add_argument("--packages",
+                    help="comma-separated; default: "
+                         + ",".join(golden.DEFAULT_PACKAGES))
+    gd.add_argument("--run", action="append", metavar="CMD",
+                    help="extra command to run in the image; repeatable")
+    gd.add_argument("--keep-build-box", action="store_true",
+                    help="leave the temporary build box for inspection")
+    gd.set_defaults(func=cmd_golden)
+
     lg = sub.add_parser("logs", help="show a box's console log")
     lg.add_argument("name")
     lg.add_argument("-n", "--lines", type=int, default=40)
@@ -314,8 +346,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         args.func(args)
-    except (boxes.BoxError, images.ImageError, spec_mod.SpecError,
-            snapshots.SnapshotError, virsh.VirshError) as exc:
+    except (boxes.BoxError, golden.GoldenError, images.ImageError,
+            spec_mod.SpecError, snapshots.SnapshotError, virsh.VirshError) as exc:
         _die(str(exc))
     return 0
 
