@@ -314,13 +314,15 @@ class App:
         # Enter through the dialog lands on it.
         entries = sorted(
             images.catalogue().items(),
-            key=lambda kv: (kv[0] != config.DEFAULT_IMAGE, not kv[1].verified, kv[0]),
+            key=lambda kv: (kv[0] != config.DEFAULT_IMAGE, kv[1].broken,
+                            not kv[1].verified, kv[0]),
         )
         image = ui.choose(
             self.stdscr, "Image",
-            [(f"{'! ' if not e.verified else '  '}{k:<14} {e.description[:32]}", k)
+            [(f"{'x ' if e.broken else ('? ' if not e.verified else '  ')}"
+              f"{k:<14} {e.description[:32]}", k)
              for k, e in entries],
-            note="! marks images that are not known to work.",
+            note="x = known broken.  ? = added but not booted yet.",
         )
         if image is None:
             return

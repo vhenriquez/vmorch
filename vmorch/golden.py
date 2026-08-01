@@ -90,6 +90,7 @@ def _flatten(src_disk: Path, dest: Path) -> None:
     """
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(".qcow2.building")
+    tmp.unlink(missing_ok=True)
     subprocess.run(
         ["qemu-img", "convert", "-O", "qcow2", "-c", str(src_disk), str(tmp)],
         check=True, capture_output=True,
@@ -163,6 +164,74 @@ def build(name: str, from_image: str | None = None,
 
     desc = f"{from_image} + " + (", ".join(packages) if packages else "customizations")
     images.register_local(name, desc)
+    progress(f"registered as image {name!r}")
+    return dest
+
+
+def build_from_box(name: str, source_box: str, keep_build_box: bool = False,
+                   progress=lambda msg: None) -> Path:
+    """Freeze an existing box into a reusable image.
+
+    The hands-on counterpart to `build`: make a box, ssh in, set it up however
+    you like, then turn it into an image. Nothing has to be expressible as a
+    package list.
+
+    The source box is **not modified**. Generalizing has to happen -- machine-id
+    and ssh host keys cannot be cloned -- but doing it in place would strip the
+    identity of a box you still use. So its disk is flattened into a staging
+    image, a throwaway box is booted from that, generalized and flattened again.
+    Two passes over the disk, and the box you built by hand is left alone.
+    """
+    if not boxes.exists(source_box):
+        raise GoldenError(f"no such box: {source_box}")
+
+    src = boxes.load(source_box)
+    if src.state == "running":
+        raise GoldenError(
+            f"stop {source_box} first (`vm stop {source_box}`). Imaging a live "
+            "box captures whatever was mid-write."
+        )
+
+    dest = config.BASES_DIR / f"{name}.qcow2"
+    if dest.exists():
+        raise GoldenError(f"{dest} already exists; remove it or pick another name")
+
+    build_box = f"{BUILD_PREFIX}{name}"[:28]
+    if boxes.exists(build_box):
+        raise GoldenError(f"remove the leftover build box first: vm rm {build_box}")
+
+    # Flatten straight to the image's real path: the throwaway box below is
+    # created *from* this image, so it has to be where the catalogue looks.
+    # The second flatten later replaces it in place (via a temp file, so the
+    # convert never reads and writes the same path).
+    progress(f"flattening {source_box}")
+    _flatten(boxes.disk_path(source_box), dest)
+
+    try:
+        images.register_local(name, f"built by hand from {source_box}")
+        progress("booting a throwaway copy to generalize it")
+        spec = BoxSpec(name=build_box, image=name, internet=False,
+                       memory=src.spec.memory, disk=src.spec.disk)
+        boxes.create(spec, start=True)
+
+        boxes._wait_reachable(build_box, timeout=420)
+        progress("generalizing (machine-id, host keys, cloud-init state)")
+        guest.run(build_box, GENERALIZE)
+
+        progress("shutting down cleanly")
+        boxes.stop(build_box)
+        _wait_stopped(build_box)
+
+        progress("flattening image")
+        _flatten(boxes.disk_path(build_box), dest)
+    finally:
+        if not keep_build_box and boxes.exists(build_box):
+            progress("removing throwaway box")
+            try:
+                boxes.destroy(build_box)
+            except Exception:                          # noqa: BLE001
+                pass
+
     progress(f"registered as image {name!r}")
     return dest
 

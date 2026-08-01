@@ -20,7 +20,14 @@ def cmd_images(args) -> None:
     for key, entry in sorted(images.catalogue().items()):
         mark = "cached" if entry.cached.exists() else "      "
         base = "base" if images.base_path(entry).exists() else "    "
-        flag = "local " if entry.local else ("      " if entry.verified else "BROKEN")
+        if entry.broken:
+            flag = "BROKEN"
+        elif entry.local:
+            flag = "local "
+        elif entry.verified:
+            flag = "      "
+        else:
+            flag = "new?  "
         print(f"  {mark} {base} {flag} {key:<14} {entry.description}")
 
 
@@ -205,12 +212,21 @@ def cmd_mount(args) -> None:
 
 
 def cmd_golden(args) -> None:
-    packages = args.packages.split(",") if args.packages else None
-    path = golden.build(
-        args.name, from_image=args.image, packages=packages,
-        run=args.run or [], keep_build_box=args.keep_build_box,
-        progress=lambda m: print(f"  {m}"),
-    )
+    show = lambda m: print(f"  {m}")            # noqa: E731
+    if args.from_box:
+        if args.packages or args.run or args.image:
+            _die("--from-box images an existing box; --image/--packages/--run "
+                 "belong to the unattended form")
+        path = golden.build_from_box(args.name, args.from_box,
+                                     keep_build_box=args.keep_build_box,
+                                     progress=show)
+    else:
+        packages = args.packages.split(",") if args.packages else None
+        path = golden.build(
+            args.name, from_image=args.image, packages=packages,
+            run=args.run or [], keep_build_box=args.keep_build_box,
+            progress=show,
+        )
     print(f"\ngolden image ready: {path}")
     print(f"use it with:  vm new mybox --image {args.name}")
 
@@ -317,6 +333,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     gd = sub.add_parser("golden", help="build a base image with software baked in")
     gd.add_argument("name", help="name for the new image")
+    gd.add_argument("--from-box", metavar="BOX",
+                    help="freeze an existing box you set up by hand "
+                         "(it must be stopped; it is not modified)")
     gd.add_argument("--image", help=f"source image (default {config.DEFAULT_IMAGE})")
     gd.add_argument("--packages",
                     help="comma-separated; default: "

@@ -48,6 +48,10 @@ class CatalogueEntry:
     archive_member: str = ""
     #: A golden image built locally by `vm golden`. Nothing to download.
     local: bool = False
+    #: Known NOT to work, as opposed to merely untested. Kept separate from
+    #: `verified` because "nobody has booted this yet" and "this is known to be
+    #: broken" are very different things to tell someone.
+    broken: bool = False
 
     @property
     def filename(self) -> str:
@@ -78,7 +82,8 @@ CATALOGUE: dict[str, CatalogueEntry] = {
         sums_algo="sha512",
         os_variant="debian12",
         package_manager="apt",
-        verified=False,     # cloud-init never runs; see the note above
+        verified=False,
+        broken=True,        # cloud-init never runs; see the note above
     ),
     "debian-13": CatalogueEntry(
         key="debian-13",
@@ -258,25 +263,48 @@ def base_path(entry: CatalogueEntry) -> Path:
     return config.BASES_DIR / f"{entry.key}.qcow2"
 
 
+ARCHIVE_SUFFIXES = (".tar.xz", ".tar.gz", ".tar.bz2", ".tar.zst", ".tgz", ".tar")
+
+
+def is_archive(entry: CatalogueEntry) -> bool:
+    return entry.filename.endswith(ARCHIVE_SUFFIXES)
+
+
 def _extract_disk(archive: Path, pattern: str, dest: Path) -> Path:
     """Pull the disk image out of a downloaded tarball.
 
     Kali and friends publish `.tar.xz` rather than a bare qcow2. The published
     checksum covers the archive, so verification happens before this runs and
     the extraction is trusted only because the archive was.
+
+    With no pattern the largest regular file wins. That is deliberately dumb and
+    almost always right: these archives hold one disk plus, at most, a small
+    licence or checksum file. Requiring the caller to name the member means
+    knowing the archive's internals before ever downloading it -- and guessing
+    wrong is easy, since Kali ships `disk.raw` where the obvious guess is
+    `*.qcow2`.
     """
     import fnmatch
     import tarfile
 
     with tarfile.open(archive) as tar:
         members = [m for m in tar.getmembers() if m.isfile()]
-        matches = [m for m in members if fnmatch.fnmatch(Path(m.name).name, pattern)]
-        if not matches:
-            names = ", ".join(Path(m.name).name for m in members[:8])
-            raise ImageError(
-                f"no member matching {pattern!r} in {archive.name}. Contains: {names}"
-            )
-        # Largest match: these archives sometimes carry a small stub alongside.
+        if not members:
+            raise ImageError(f"{archive.name} contains no files")
+
+        if pattern:
+            matches = [m for m in members
+                       if fnmatch.fnmatch(Path(m.name).name, pattern)]
+            if not matches:
+                names = ", ".join(Path(m.name).name for m in members[:8])
+                raise ImageError(
+                    f"no member matching {pattern!r} in {archive.name}. "
+                    f"Contains: {names}. Leave archive_member unset to take "
+                    "the largest file."
+                )
+        else:
+            matches = members
+
         member = max(matches, key=lambda m: m.size)
         src = tar.extractfile(member)
         if src is None:
@@ -307,7 +335,7 @@ def ensure_base(entry: CatalogueEntry) -> Path:
     config.BASES_DIR.mkdir(parents=True, exist_ok=True)
     tmp = base.with_suffix(".qcow2.tmp")
 
-    if entry.archive_member:
+    if is_archive(entry):
         _extract_disk(cached, entry.archive_member, tmp)
         # An extracted disk may be raw rather than qcow2; normalise so the
         # overlay chain always has a qcow2 backing file.
