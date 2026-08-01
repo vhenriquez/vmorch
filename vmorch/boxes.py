@@ -360,6 +360,15 @@ def grant_service(name: str, svc_name: str, host_port: int, guest_port: int,
     if any(s.name == svc_name for s in box.spec.from_host):
         raise BoxError(f"box {name!r} already has service {svc_name!r}")
 
+    # The spec models three mechanisms but only one is built. Accepting the
+    # others would record a grant in the spec, show it in `vm show`, and deliver
+    # nothing -- a silent no-op is worse than a refusal.
+    if via != "filter":
+        raise BoxError(
+            f"via={via!r} is designed but not implemented yet; use via=filter. "
+            "See docs/agent-sandbox-use-case.md for what ssh and vsock would do."
+        )
+
     entry = {"name": svc_name, "host": host_port, "guest": guest_port, "via": via}
     box.spec.from_host.append(
         spec_mod._parse_service(entry, len(box.spec.from_host) + 1,
