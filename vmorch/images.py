@@ -37,8 +37,9 @@ class CatalogueEntry:
     url: str = ""
     sums_url: str = ""
     sums_algo: str = "sha256"   # distros disagree; Debian ships SHA512
+    #: Recorded for reference only -- nothing reads it. Kept because it is
+    #: already in users' catalogues and is useful as a human note.
     os_variant: str = "linux2022"
-    package_manager: str = "apt"
     # False for images known not to work. Surfaced in the UI so that pressing
     # Enter through a dialog cannot land you on a broken image.
     verified: bool = True
@@ -85,7 +86,6 @@ CATALOGUE: dict[str, CatalogueEntry] = {
         sums_url="https://cloud.debian.org/images/cloud/bookworm/latest/SHA512SUMS",
         sums_algo="sha512",
         os_variant="debian12",
-        package_manager="apt",
         verified=False,
         broken=True,        # cloud-init never runs; see the note above
     ),
@@ -96,7 +96,6 @@ CATALOGUE: dict[str, CatalogueEntry] = {
         sums_url="https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS",
         sums_algo="sha512",
         os_variant="debian13",
-        package_manager="apt",
         verified=False,     # untested; debian-12 is broken, assume nothing
     ),
     "ubuntu-24.04": CatalogueEntry(
@@ -107,7 +106,6 @@ CATALOGUE: dict[str, CatalogueEntry] = {
         sums_url="https://cloud-images.ubuntu.com/noble/current/SHA256SUMS",
         sums_algo="sha256",
         os_variant="ubuntu24.04",
-        package_manager="apt",
     ),
 }
 
@@ -155,7 +153,7 @@ EXAMPLE_USER_CATALOGUE = '''\
 CATALOGUE_VERSION = 1
 
 _FIELD_ORDER = ("description", "url", "sums_url", "sums_algo", "archive_member",
-                "os_variant", "package_manager", "verified", "local", "hidden",
+                "os_variant", "verified", "local", "hidden",
                 "broken")
 
 
