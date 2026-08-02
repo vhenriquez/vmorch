@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import (boxes, config, consoletext, golden, images, network,
+from . import (audit, boxes, config, consoletext, golden, images, network,
                snapshots, spec as spec_mod, virsh)
 from .spec import BoxSpec
 
@@ -351,6 +351,59 @@ def cmd_config(args) -> None:
         print(f"\n{config.CONFIG_FILE} already exists; not overwriting")
 
 
+def cmd_audit(args) -> None:
+    if args.enable_dns:
+        running = [b.name for b in boxes.list_boxes() if b.state == "running"]
+        if running:
+            print("Enabling DNS logging restarts both libvirt networks, which "
+                  "detaches every\nrunning box from its NICs. Currently running: "
+                  f"{', '.join(running)}")
+            print("\nStop them first, or accept that they will lose networking "
+                  "until restarted.")
+            if input("continue anyway? [y/N] ").strip().lower() != "y":
+                return
+        done = network.enable_dns_logging()
+        print(f"DNS query logging enabled on: {', '.join(done) or 'already on'}")
+        print("Queries now go to the journal; read them with `vm audit`.")
+        if running:
+            print(f"\nRestart these to restore networking: {', '.join(running)}")
+        return
+
+    if args.install:
+        path = "/etc/nftables.d/vmorch-audit.nft"
+        print("Connection logging needs one root command. Review, then run:\n")
+        print(f"  sudo mkdir -p /etc/nftables.d \\\n"
+              f"    && sudo tee {path} >/dev/null <<'NFT'\n"
+              f"{audit.nft_ruleset()}NFT\n"
+              f"  sudo nft -f {path}\n")
+        print("To survive a reboot, load it from /etc/nftables.conf or a unit.")
+        print("To remove entirely:  sudo nft delete table inet vmorch_audit")
+        return
+
+    state = audit.available()
+    if not state["dns"]:
+        print("! DNS logging is OFF. Enable with:  vm audit --enable-dns\n")
+    if not state["connections"]:
+        print("! Connection logging is OFF. Set it up with:  vm audit --install\n")
+
+    events = audit.collect(since=args.since, box=args.box,
+                           blocked_only=args.blocked)
+    if not events:
+        print(f"no events since {args.since}")
+        return
+
+    print(f"{'WHEN':<20}{'BOX':<14}{'KIND':<7}DETAIL")
+    for e in events:
+        if e.kind == "dns":
+            detail = e.detail
+        else:
+            name = f"  ({e.hostname})" if e.hostname else ""
+            detail = f"{e.verdict:<16}{e.proto:<5}{e.src} -> {e.dst}{name}"
+        print(f"{e.when:<20}{e.box:<14}{e.kind:<7}{detail}")
+    print(f"\n  {len(events)} events since {args.since}"
+          f"{' (blocked only)' if args.blocked else ''}")
+
+
 def cmd_net(args) -> None:
     created = network.ensure_base()
     print(f"management network {config.MGMT_NET}: "
@@ -455,6 +508,18 @@ def build_parser() -> argparse.ArgumentParser:
                         help="re-run first-boot config to repair a box")
     rs.add_argument("name")
     rs.set_defaults(func=cmd_reseed)
+
+    au = sub.add_parser("audit", help="what boxes looked up and connected to")
+    au.add_argument("--since", default="-24h",
+                    help="journalctl time spec, e.g. -1h, today, '2026-08-01'")
+    au.add_argument("--box", help="only this box")
+    au.add_argument("--blocked", action="store_true",
+                    help="only refused attempts, usually the interesting ones")
+    au.add_argument("--install", action="store_true",
+                    help="print the one root command for connection logging")
+    au.add_argument("--enable-dns", action="store_true",
+                    help="turn on DNS query logging (restarts the networks)")
+    au.set_defaults(func=cmd_audit)
 
     cf = sub.add_parser("config", help="show paths, defaults and disk usage")
     cf.add_argument("--write", action="store_true",

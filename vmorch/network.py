@@ -24,7 +24,11 @@ import re
 
 from . import config, virsh
 
-MGMT_NET_XML = f"""<network>
+# xmlns:dnsmasq lets us pass options straight to the dnsmasq libvirt runs for
+# this network. log-queries records every lookup with the client's address,
+# which is the audit trail for what a box tried to reach -- by name, before it
+# became an IP that means nothing six months later.
+MGMT_NET_XML = f"""<network xmlns:dnsmasq='http://libvirt.org/schemas/network/dnsmasq/1.0'>
   <name>{config.MGMT_NET}</name>
   <bridge name='{config.MGMT_BRIDGE}' stp='on' delay='0'/>
   <!-- No <forward> element: this network is isolated. Host<->guest only,
@@ -34,6 +38,9 @@ MGMT_NET_XML = f"""<network>
       <range start='{config.MGMT_DHCP_START}' end='{config.MGMT_DHCP_END}'/>
     </dhcp>
   </ip>
+  <dnsmasq:options>
+    <dnsmasq:option value='log-queries'/>
+  </dnsmasq:options>
 </network>
 """
 
@@ -66,9 +73,40 @@ def _wan_filter_xml(allow_lan: bool) -> str:
     left to anyone's memory.
     """
     name = "vmorch-wan-lan" if allow_lan else "vmorch-wan-nolan"
+    gw = nat_gateway()
+
+    # DNS lockdown, on BOTH filters. Without it the query log is worth little:
+    # a box can talk to 8.8.8.8:53 directly, or DNS-over-TLS on 853, and never
+    # touch the resolver whose queries we record. Anything but our resolver is
+    # dropped, so the log is complete for plain DNS and DoT.
+    #
+    # DoH is not covered -- it is HTTPS to 443 and indistinguishable from any
+    # other web traffic without blocking provider addresses outright. The
+    # connection log is what catches that.
+    dns_lock = [
+        "  <!-- DNS only via our resolver, so the query log has no holes -->",
+        "  <rule action='accept' direction='out' priority='100'>",
+        f"    <udp dstipaddr='{gw}' dstportstart='53' dstportend='53'/>",
+        "  </rule>",
+        "  <rule action='accept' direction='out' priority='100'>",
+        f"    <tcp dstipaddr='{gw}' dstportstart='53' dstportend='53'/>",
+        "  </rule>",
+        "  <rule action='drop' direction='out' priority='300'>",
+        "    <udp dstportstart='53' dstportend='53'/>",
+        "  </rule>",
+        "  <rule action='drop' direction='out' priority='300'>",
+        "    <tcp dstportstart='53' dstportend='53'/>",
+        "  </rule>",
+        "  <!-- DNS-over-TLS -->",
+        "  <rule action='drop' direction='out' priority='300'>",
+        "    <tcp dstportstart='853' dstportend='853'/>",
+        "  </rule>",
+    ]
 
     if allow_lan:
-        rules = "  <!-- lan = true: no egress restrictions beyond clean-traffic -->"
+        rules = "\n".join(
+            ["  <!-- lan = true: no egress restrictions beyond DNS lockdown -->"]
+            + dns_lock)
     else:
         # Priorities are explicit. The accepts must outrank the drops; relying
         # on document order here would be a latent ordering bug.
@@ -78,7 +116,6 @@ def _wan_filter_xml(allow_lan: bool) -> str:
         # this exact exception the box has working internet and resolves
         # nothing. Verified: the isolated management network's dnsmasq does not
         # forward upstream, so pointing guests there instead would not work.
-        gw = nat_gateway()
         carve_outs = [
             "  <!-- Carve-outs FIRST (priority 100): without these the box has",
             "       'internet' but cannot get an address or resolve a name. -->",
@@ -113,7 +150,7 @@ def _wan_filter_xml(allow_lan: bool) -> str:
                     f"    <{proto} dstipaddr='{addr}' dstipmask='{prefix}'/>",
                     "  </rule>",
                 ]
-        rules = "\n".join(carve_outs + drops)
+        rules = "\n".join(dns_lock + carve_outs + drops)
 
     return f"""<filter name='{name}' chain='root'>
   <filterref filter='clean-traffic'/>
@@ -228,6 +265,42 @@ def reserve_address(name: str, mac: str, ip: str) -> None:
         benign = ("already exists", "existing dhcp host entry")
         if not any(msg in exc.stderr for msg in benign):
             raise
+
+
+def enable_dns_logging() -> list[str]:
+    """Turn on dnsmasq query logging for both networks.
+
+    Returns the networks that had to be restarted. libvirt regenerates each
+    dnsmasq config from the network XML at start, so the option only takes
+    effect on restart -- and restarting a network detaches every guest attached
+    to it. Callers must warn before doing this.
+    """
+    restarted = []
+    for net in (config.MGMT_NET, config.NAT_NET):
+        xml = virsh.run("net-dumpxml", "--inactive", net)
+        if "log-queries" in xml:
+            continue
+        xml = re.sub(r"<network(\s[^>]*)?>",
+                     "<network xmlns:dnsmasq="
+                     "'http://libvirt.org/schemas/network/dnsmasq/1.0'>",
+                     xml, count=1)
+        xml = xml.replace("</network>", """  <dnsmasq:options>
+    <dnsmasq:option value='log-queries'/>
+  </dnsmasq:options>
+</network>""")
+        virsh.define_network(xml)
+        virsh.run("net-destroy", net, check=False)
+        virsh.run("net-start", net)
+        restarted.append(net)
+    return restarted
+
+
+def dns_logging_enabled() -> bool:
+    try:
+        return all("log-queries" in virsh.run("net-dumpxml", "--inactive", n)
+                   for n in (config.MGMT_NET, config.NAT_NET))
+    except virsh.VirshError:
+        return False
 
 
 def ensure_base() -> bool:

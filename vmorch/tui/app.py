@@ -602,6 +602,7 @@ class App:
             ("Edit box spec                 F4", "edit"),
             ("Image catalogue", "images"),
             ("Configuration and disk usage", "config"),
+            ("Audit log: lookups and connections", "audit"),
             ("Re-mount shared folders", "mount"),
             ("Reseed: repair a box that refuses ssh", "reseed"),
             ("Build a golden image...", "golden"),
@@ -645,6 +646,15 @@ class App:
                        "into it and flattens the result. It takes several "
                        "minutes and is best watched, so run it from the CLI:\n\n"
                        "  vm golden agent-base --packages tmux,git")
+        elif choice == "audit":
+            import io, contextlib
+            from .. import cli as _cli
+            buf = io.StringIO()
+            args = type("A", (), {"since": "-24h", "box": None, "blocked": False,
+                                  "install": False, "enable_dns": False})()
+            with contextlib.redirect_stdout(buf):
+                _cli.cmd_audit(args)
+            ui.pager(self.stdscr, "Audit — last 24h", buf.getvalue())
         elif choice == "config":
             import io
             import contextlib
