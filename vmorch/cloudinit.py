@@ -94,6 +94,11 @@ def user_data(spec: BoxSpec) -> str:
     # The rule is written explicitly below instead, and the image's own file
     # deleted, so the outcome does not depend on what the image shipped.
     lines += [
+        # kvm: /dev/kvm is root:kvm 0660, so a nested box exposes the device
+        # but the agent cannot open it -- the emulator falls back to software
+        # and is unusably slow, with nothing obviously wrong.
+        # docker/lxd: harmless when absent, and saves a reboot when present.
+        "    groups: [kvm, docker]",
         "    shell: /bin/bash",
         "    lock_passwd: true",
         "    ssh_authorized_keys:",

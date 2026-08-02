@@ -99,6 +99,7 @@ def cmd_new(args) -> None:
         internet=args.internet,
         lan=args.lan,
         sudo=args.sudo,
+        nested=args.nested,
     )
     print(f"creating {box_spec.name} from {box_spec.image} ...")
     box = boxes.create(box_spec, start=not args.no_start)
@@ -136,6 +137,7 @@ def cmd_show(args) -> None:
     print(f"address   {box.ip}   (vsock cid {box.cid})")
     print(f"network   internet={s.internet} lan={s.lan}")
     print(f"sudo      {_sudo_label(s.sudo)}")
+    print(f"nested    {'yes — box can run its own VMs' if s.nested else 'no'}")
 
     print("\nfolders")
     if not s.folders:
@@ -473,6 +475,9 @@ def build_parser() -> argparse.ArgumentParser:
     new.add_argument("--sudo", default=config.AGENT_SUDO,
                      choices=sorted(spec_mod.VALID_SUDO),
                      help="agent's sudo: nopasswd (default), password, none")
+    new.add_argument("--nested", action="store_true",
+                     help="expose vmx/svm so the box can run its own VMs "
+                          "(needed for the Android emulator); more attack surface")
     new.add_argument("--no-start", action="store_true")
     new.set_defaults(func=cmd_new)
 

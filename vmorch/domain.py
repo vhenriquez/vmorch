@@ -31,6 +31,24 @@ from .spec import BoxSpec
 SPARE_PCI_PORTS = 12
 
 
+def _cpu_xml(spec: BoxSpec) -> str:
+    """CPU model, and whether the guest may run its own VMs.
+
+    host-passthrough would hand the guest vmx by default. That is a large
+    amount of extra KVM code reachable from inside the box, so it is disabled
+    unless the box asks for it -- and some workloads genuinely need it: the
+    Android emulator and Genymotion are built on hardware virtualisation and
+    fall back to unusably slow software emulation without it.
+    """
+    if spec.nested:
+        return ("  <!-- nested = true: this box may run its own VMs -->\n"
+                "  <cpu mode='host-passthrough' check='none' migratable='on'/>")
+    return ("  <cpu mode='host-passthrough' check='none' migratable='on'>\n"
+            "    <feature policy='disable' name='vmx'/>\n"
+            "    <feature policy='disable' name='svm'/>\n"
+            "  </cpu>")
+
+
 def _vsock_xml(cid: int) -> str:
     """Host<->guest channel that does not use IP at all.
 
@@ -185,13 +203,7 @@ def build(spec: BoxSpec, disk_path: str, mac: str, wan_mac: str, cid: int,
     <apic/>
   </features>
 
-  <!-- host-passthrough gives the guest every CPU feature the host has,
-       including vmx: nested virtualisation. A box that can run its own VMs
-       exposes a large amount of extra KVM code, and nothing here needs it. -->
-  <cpu mode='host-passthrough' check='none' migratable='on'>
-    <feature policy='disable' name='vmx'/>
-    <feature policy='disable' name='svm'/>
-  </cpu>
+{_cpu_xml(spec)}
 
   <clock offset='utc'>
     <timer name='rtc' tickpolicy='catchup'/>

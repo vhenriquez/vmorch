@@ -74,6 +74,11 @@ class BoxSpec:
     #: What the agent user may do with sudo. Per box, because one box
     #: may be doing package work while another only runs code.
     sudo: str = config.AGENT_SUDO
+    #: Expose vmx/svm so the box can run its own VMs. Off by default: it is a
+    #: large amount of extra KVM surface reachable from the guest. Needed for
+    #: the Android emulator (AVD), Genymotion, or anything else built on
+    #: hardware virtualisation.
+    nested: bool = False
     internet: bool = False
     lan: bool = False
     folders: list[Folder] = field(default_factory=list)
@@ -195,6 +200,7 @@ def parse(data: dict, name: str | None = None) -> BoxSpec:
         disk=str(data.get("disk", config.DEFAULT_DISK)),
         user=str(data.get("user", config.DEFAULT_USER)),
         sudo=_parse_sudo(data.get("sudo")),
+        nested=bool(data.get("nested", False)),
         internet=bool(network.get("internet", False)),
         lan=bool(network.get("lan", False)),
         folders=folders,
@@ -230,6 +236,7 @@ def dump(spec: BoxSpec) -> str:
         f'disk = "{spec.disk}"',
         f'user = "{spec.user}"',
         f'sudo = "{spec.sudo}"',
+        f"nested = {str(spec.nested).lower()}",
         "",
         "[network]",
         "# internet = true grants the PUBLIC internet only.",
