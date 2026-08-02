@@ -523,6 +523,27 @@ class App:
             self.status = f"Rolled back to {res.index} ({res.label})"
         self.refresh_boxes()
 
+    def act_reseed(self) -> None:
+        box = self.current
+        if not box:
+            return
+        if not ui.confirm(
+            self.stdscr, "Re-run first-boot config",
+            f"Reseed {box.name}?\n\n"
+            "This restarts the box and makes cloud-init run again: it "
+            "regenerates ssh host keys, re-applies the agent user and your key, "
+            "and redoes mounts. Use it when a box pings but refuses ssh.\n\n"
+            "Installed software and your data are untouched. Files cloud-init "
+            "owns (netplan config, /etc/hosts) are rewritten.",
+        ):
+            return
+        res = self.task("Reseeding", lambda: boxlib.reseed(box.name),
+                        "Rebuilding the seed and restarting the box.")
+        if res is not None:
+            self.status = (f"{box.name} reseeded — cloud-init re-runs on boot; "
+                           "give it a minute")
+        self.refresh_boxes()
+
     def act_view(self) -> None:
         box = self.current
         if not box:
@@ -581,6 +602,7 @@ class App:
             ("Edit box spec                 F4", "edit"),
             ("Image catalogue", "images"),
             ("Re-mount shared folders", "mount"),
+            ("Reseed: repair a box that refuses ssh", "reseed"),
             ("Build a golden image...", "golden"),
             ("Ensure management network", "net"),
             ("Destroy box                   F8", "del"),
@@ -592,6 +614,7 @@ class App:
             "share": self.act_share, "service": self.act_service,
             "snap": self.act_snapshot, "view": self.act_view,
             "edit": self.act_edit, "del": self.act_delete, "help": self.act_help,
+            "reseed": self.act_reseed,
         }
         if choice in actions:
             actions[choice]()
@@ -716,7 +739,8 @@ HELP = """vmorch — Norton Commander style control panel
 NAVIGATION
   Tab / ← →        switch between the Boxes and Details panels
   ↑ ↓ / k j        move the cursor
-  r                reload from disk
+  r                reload now (the list also refreshes itself every 1.5s,
+                   so boxes started elsewhere show up on their own)
 
 BOXES PANEL (left)
   Enter            ssh into the box, starting it first if needed
@@ -728,6 +752,15 @@ DETAILS PANEL (right)
   F8               revoke whatever the cursor is on: a shared folder,
                    a granted service
   Enter            on a snapshot row, roll back to it
+
+RECOVERY
+  A box that pings but refuses ssh has usually lost its ssh host keys:
+  the socket accepts the connection, sshd cannot start, the client sees a
+  refusal. F9 -> "Reseed" re-runs the box's first-boot configuration and
+  regenerates them. Installed software and data are untouched.
+
+  F9 -> "Re-mount shared folders" fixes a share that was configured while
+  the box was stopped and never got mounted.
 
 ACTIONS
   F2               take a snapshot (the box must be stopped)
