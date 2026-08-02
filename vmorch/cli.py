@@ -56,6 +56,11 @@ def _die(msg: str) -> None:
 
 
 def cmd_images(args) -> None:
+    if args.restore_defaults:
+        added = images.restore_defaults()
+        print(f"restored: {', '.join(added)}" if added
+              else "nothing to restore; all shipped images are present")
+        print()
     # This is a catalogue of what you CAN use, not an inventory of what is on
     # disk -- built-in entries are always listed. The two columns say what is
     # present locally.
@@ -75,7 +80,10 @@ def cmd_images(args) -> None:
             flag = "new?  "
         print(f"  {mark:<11}{base:<6}{flag:<8}{key:<15}{entry.description}")
 
-    print("\n  DOWNLOADED = verified original in the cache"
+    print(f"\n  catalogue: {images.USER_CATALOGUE}"
+          "\n  delete an entry's block there to remove it for good"
+          "\n"
+          "\n  DOWNLOADED = verified original in the cache"
           f" ({config.DOWNLOAD_CACHE})"
           f"\n  BASE       = ready to build boxes from ({config.BASES_DIR})"
           "\n  STATUS     = local (you built it) · new? (untested) · BROKEN")
@@ -360,6 +368,8 @@ def build_parser() -> argparse.ArgumentParser:
     im = sub.add_parser("images", help="list the image catalogue")
     im.add_argument("--all", action="store_true",
                     help="include entries hidden in images.toml")
+    im.add_argument("--restore-defaults", action="store_true",
+                    help="re-add shipped images you have deleted")
     im.set_defaults(func=cmd_images)
 
     new = sub.add_parser("new", help="create a box")

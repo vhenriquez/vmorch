@@ -150,6 +150,109 @@ EXAMPLE_USER_CATALOGUE = '''\
 '''
 
 
+#: Bumped only if the shipped catalogue changes in a way existing users should
+#: pick up. Its presence is what marks a file as already migrated.
+CATALOGUE_VERSION = 1
+
+_FIELD_ORDER = ("description", "url", "sums_url", "sums_algo", "archive_member",
+                "os_variant", "package_manager", "verified", "local", "hidden",
+                "broken")
+
+
+def _toml_value(v) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    return f'"{v}"'
+
+
+def _table_name(key: str) -> str:
+    """TOML table header for an image key.
+
+    A dot is TOML's key separator, so a bare [ubuntu-24.04] declares table "04"
+    nested inside "ubuntu-24" -- the image silently comes back named
+    "ubuntu-24" with everything else lost. Keys with dots must be quoted.
+    """
+    return f'["{key}"]' if not key.replace("-", "").replace("_", "").isalnum() \
+        else f"[{key}]"
+
+
+def serialize_entry(entry: CatalogueEntry) -> str:
+    """Render one entry as a TOML block, omitting anything left at default."""
+    default = CatalogueEntry(key="_", description="_")
+    lines = [_table_name(entry.key)]
+    for field in _FIELD_ORDER:
+        value = getattr(entry, field)
+        if field != "description" and value == getattr(default, field):
+            continue
+        if value == "":
+            continue
+        lines.append(f"{field} = {_toml_value(value)}")
+    return "\n".join(lines) + "\n"
+
+
+CATALOGUE_HEADER = f"""\
+# vmorch image catalogue. THIS FILE IS THE CATALOGUE -- nothing is hidden in
+# the code. `vm images` lists exactly what is here.
+#
+# To remove an image you do not want, delete its block. That is all.
+# To add one, copy a block and edit it; `vm golden` appends its own.
+# To keep an entry but hide it from listings, set hidden = true.
+#
+# Restore the images that ship with vmorch: vm images --restore-defaults
+
+catalogue_version = {CATALOGUE_VERSION}
+"""
+
+
+def ensure_user_catalogue() -> None:
+    """Materialise the shipped catalogue into the user's file, once.
+
+    The built-ins used to be merged in from code on every run, so an entry
+    could not be deleted -- only hidden -- and there was no file to point at
+    when someone asked where an image was defined. Writing them out once makes
+    this file the single source of truth: delete a block and the image is gone.
+
+    Runs only when the version marker is absent, so a deleted entry stays
+    deleted.
+    """
+    if USER_CATALOGUE.exists():
+        text = USER_CATALOGUE.read_text()
+        if "catalogue_version" in text:
+            return
+        # Pre-existing file from before this change: top it up with any shipped
+        # entry it does not already define, rather than clobbering their work.
+        missing = [e for k, e in CATALOGUE.items()
+                   if _table_name(k) not in text]
+        USER_CATALOGUE.write_text(
+            CATALOGUE_HEADER
+            + "\n# --- your entries (kept from the previous file) ---\n\n"
+            + text.lstrip("\n")
+            + ("\n\n# --- images shipped with vmorch ---\n\n"
+               + "\n".join(serialize_entry(e) for e in missing) if missing else "")
+        )
+        return
+
+    USER_CATALOGUE.parent.mkdir(parents=True, exist_ok=True)
+    USER_CATALOGUE.write_text(
+        CATALOGUE_HEADER + "\n"
+        + "\n".join(serialize_entry(e) for e in CATALOGUE.values())
+    )
+
+
+def restore_defaults() -> list[str]:
+    """Re-add any shipped image the user has deleted. Returns what was added."""
+    ensure_user_catalogue()
+    text = USER_CATALOGUE.read_text()
+    missing = [e for k, e in CATALOGUE.items()
+                   if _table_name(k) not in text]
+    if missing:
+        USER_CATALOGUE.write_text(
+            text.rstrip("\n") + "\n\n"
+            + "\n".join(serialize_entry(e) for e in missing)
+        )
+    return [e.key for e in missing]
+
+
 def load_user_catalogue() -> dict[str, CatalogueEntry]:
     """Parse ~/vmorch/images.toml.
 
@@ -183,15 +286,19 @@ def load_user_catalogue() -> dict[str, CatalogueEntry]:
 
 
 def catalogue(include_hidden: bool = False) -> dict[str, CatalogueEntry]:
-    """Built-ins with the user's own entries merged over the top."""
-    merged = dict(CATALOGUE)
+    """Every image, read from the user's catalogue file.
+
+    The file is authoritative. An entry deleted from it is gone -- there is no
+    invisible built-in list adding it back.
+    """
+    ensure_user_catalogue()
     try:
-        merged.update(load_user_catalogue())
+        entries = load_user_catalogue()
     except Exception as exc:                          # noqa: BLE001
         raise ImageError(f"{USER_CATALOGUE}: {exc}") from None
     if include_hidden:
-        return merged
-    return {k: v for k, v in merged.items() if not v.hidden}
+        return entries
+    return {k: v for k, v in entries.items() if not v.hidden}
 
 
 def register_local(key: str, description: str) -> None:

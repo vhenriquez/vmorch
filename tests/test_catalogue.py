@@ -29,9 +29,13 @@ from vmorch import images  # noqa: E402
 
 
 def with_catalogue(text: str):
-    """Point the loader at a temporary images.toml."""
+    """Point the loader at a temporary images.toml.
+
+    The version marker is included so migration does not re-add shipped images
+    on top of whatever the test is asserting.
+    """
     tmp = Path(tempfile.mkdtemp()) / "images.toml"
-    tmp.write_text(text)
+    tmp.write_text(f"catalogue_version = {images.CATALOGUE_VERSION}\n\n" + text)
     images.USER_CATALOGUE = tmp
     return tmp
 
@@ -47,23 +51,33 @@ def main() -> int:
     failures = 0
     original = images.USER_CATALOGUE
     try:
-        # 1. A partial override patches the built-in rather than replacing it.
-        with_catalogue("[debian-12]\nhidden = true\n")
-        e = images.get("debian-12")
-        failures += check("partial override keeps the built-in url",
-                          bool(e.url), f"url was {e.url!r}")
-        failures += check("partial override keeps the description",
-                          "Debian 12" in e.description, e.description)
-        failures += check("partial override applies the new field", e.hidden)
-        failures += check("and does not lose other built-in flags", e.broken)
+        # 1. The file is the catalogue: an entry absent from it is GONE, with
+        #    no invisible built-in list adding it back.
+        with_catalogue('["ubuntu-24.04"]\nurl = "https://x/u.img"\n')
+        failures += check("deleted shipped image stays deleted",
+                          "debian-12" not in images.catalogue(include_hidden=True))
+        failures += check("and stays gone on a second read",
+                          "debian-12" not in images.catalogue(include_hidden=True))
 
-        # 2. Hiding removes it from the listing but not from use.
+        # 2. A dotted key round-trips. TOML treats "." as a key separator, so
+        #    an unquoted [ubuntu-24.04] silently becomes table "04" under
+        #    "ubuntu-24" and the image comes back renamed and empty.
+        failures += check("dotted key survives",
+                          "ubuntu-24.04" in images.catalogue(),
+                          str(sorted(images.catalogue())))
+        rendered = images.serialize_entry(images.CATALOGUE["ubuntu-24.04"])
+        failures += check("dotted key is quoted when written",
+                          rendered.startswith('["ubuntu-24.04"]'),
+                          rendered.split("\n")[0])
+
+        # 3. hidden still works, for tidying without deleting.
+        with_catalogue('[thing]\nurl = "https://x/y.img"\nhidden = true\n')
         failures += check("hidden entry is out of the pick-list",
-                          "debian-12" not in images.catalogue())
+                          "thing" not in images.catalogue())
         failures += check("hidden entry still resolves when named",
-                          images.get("debian-12").key == "debian-12")
+                          images.get("thing").key == "thing")
         failures += check("--all still shows it",
-                          "debian-12" in images.catalogue(include_hidden=True))
+                          "thing" in images.catalogue(include_hidden=True))
 
         # 3. A brand-new entry needs no built-in to exist.
         with_catalogue('[mydistro]\nurl = "https://x/y.qcow2"\n')
@@ -78,10 +92,16 @@ def main() -> int:
         failures += check("unknown keys are ignored",
                           images.get("weird").url == "https://a/b.img")
 
-        # 5. Built-ins survive an empty file.
-        with_catalogue("")
-        failures += check("built-ins present with an empty catalogue",
-                          "ubuntu-24.04" in images.catalogue())
+        # 5. A file with no marker is topped up rather than clobbered.
+        tmp = Path(tempfile.mkdtemp()) / "images.toml"
+        tmp.write_text('[mine]\nurl = "https://x/mine.img"\n')
+        images.USER_CATALOGUE = tmp
+        cat = images.catalogue()
+        failures += check("migration keeps the user's own entry", "mine" in cat)
+        failures += check("migration adds the shipped images",
+                          "ubuntu-24.04" in cat)
+        failures += check("migration marks the file so it runs once",
+                          "catalogue_version" in tmp.read_text())
     finally:
         images.USER_CATALOGUE = original
 
