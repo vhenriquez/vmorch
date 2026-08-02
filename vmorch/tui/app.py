@@ -33,6 +33,25 @@ from .ui import attr, frame, fill, put
 #: How often the box list re-checks run states, in milliseconds.
 POLL_MS = 1500
 
+#: One description per box option, used by BOTH the detail panel and the
+#: creation form. Single source so an option cannot be explained in one place
+#: and left bare in the other.
+OPTION_HELP = {
+    "image":    "Base image the box is built from. Golden images carry software already installed.",
+    "cpus":     "Virtual CPUs given to the box.",
+    "memory":   "RAM given to the box.",
+    "disk":     "Maximum disk size. A ceiling, not an allocation -- a box uses only what it writes.",
+    "internet": "Reach the PUBLIC internet. Does not include your local network.",
+    "lan":      "Also reach the local network: router, NAS, other machines. Off by default.",
+    "sudo":     "What the agent inside may escalate to. The boundary is the VM, so this is defence in depth.",
+    "nested":   "Expose vmx/svm so the box can run its OWN virtual machines. Needed for the Android emulator and Genymotion; redroid does not need it. Real extra attack surface -- leave off unless required.",
+    "start":    "Start the box immediately after creating it.",
+}
+
+#: Options where "on" widens what the box can reach or do. Shown in warning
+#: colour so the risky setting is never the quiet one.
+RISKY_WHEN_ON = {"lan", "nested"}
+
 KEYBAR = [
     ("1", "Help"), ("2", "Snap"), ("3", "View"), ("4", "Edit"), ("5", "Share"),
     ("6", "Srvc"), ("7", "New"), ("8", "Del"), ("9", "Menu"), ("10", "Quit"),
@@ -113,13 +132,17 @@ class App:
         add(Row("info", f"address    {box.ip}   vsock cid {box.cid}"))
         net = ("internet + LAN" if s.lan else "internet only") if s.internet \
             else "isolated (no network out)"
-        add(Row("info", f"network    {net}"))
+        add(Row("info", f"network    {net}", warn=s.lan))
         sudo_text = {
-            "nopasswd": "passwordless (agent can become root)",
-            "password": "password required (secret on host)",
-            "none": "none (agent cannot escalate)",
+            "nopasswd": "passwordless — agent can become root",
+            "password": "password required — secret on host",
+            "none": "none — agent cannot escalate",
         }.get(s.sudo, s.sudo)
         add(Row("info", f"sudo       {sudo_text}", warn=s.sudo == "nopasswd"))
+        add(Row("info",
+                "nested     " + ("yes — box can run its own VMs (emulators)"
+                                 if s.nested else "no — no hardware virt inside"),
+                warn=s.nested))
 
         add(Row("header", ""))
         add(Row("header", f"Folders ({len(s.folders)})"))
@@ -347,27 +370,42 @@ class App:
             key=lambda kv: (kv[0] != config.DEFAULT_IMAGE, kv[1].broken,
                             not kv[1].verified, kv[0]),
         )
-        image = ui.choose(
-            self.stdscr, "Image",
-            [(f"{'x ' if e.broken else ('? ' if not e.verified else '  ')}"
-              f"{k:<14} {e.description[:32]}", k)
-             for k, e in entries],
-            note="x = known broken.  ? = added but not booted yet.",
+        entries = sorted(
+            images.catalogue().items(),
+            key=lambda kv: (kv[0] != config.DEFAULT_IMAGE, kv[1].broken,
+                            not kv[1].verified, kv[0]),
         )
-        if image is None:
-            return
-        net = ui.choose(self.stdscr, "Network access", [
-            ("Isolated — no network out (default)", (False, False)),
-            ("Internet only — no LAN", (True, False)),
-            ("Internet + LAN — router, NAS, other hosts", (True, True)),
-        ], note="Isolated boxes can still reach granted host services.")
-        if net is None:
-            return
-        memory = ui.prompt(self.stdscr, "New box", "Memory:", config.DEFAULT_MEMORY)
-        if memory is None:
-            return
-        disk = ui.prompt(self.stdscr, "New box", "Disk:", config.DEFAULT_DISK)
-        if disk is None:
+        fields = [
+            {"key": "image", "label": "image", "type": "choice",
+             "value": config.DEFAULT_IMAGE,
+             "options": [(f"{'x ' if e.broken else ('? ' if not e.verified else '  ')}"
+                          f"{k:<14} {e.description[:30]}", k) for k, e in entries],
+             "help": OPTION_HELP["image"]},
+            {"key": "cpus", "label": "cpus", "type": "text",
+             "value": config.DEFAULT_CPUS, "help": OPTION_HELP["cpus"]},
+            {"key": "memory", "label": "memory", "type": "text",
+             "value": config.DEFAULT_MEMORY, "help": OPTION_HELP["memory"]},
+            {"key": "disk", "label": "disk", "type": "text",
+             "value": config.DEFAULT_DISK, "help": OPTION_HELP["disk"]},
+            {"key": "internet", "label": "internet", "type": "bool",
+             "value": False, "help": OPTION_HELP["internet"]},
+            {"key": "lan", "label": "lan", "type": "bool", "value": False,
+             "help": OPTION_HELP["lan"], "risky": True},
+            {"key": "sudo", "label": "sudo", "type": "choice",
+             "value": config.AGENT_SUDO,
+             "options": [("nopasswd — agent can become root", "nopasswd"),
+                         ("password — secret kept on the host", "password"),
+                         ("none — agent cannot escalate", "none")],
+             "help": OPTION_HELP["sudo"]},
+            {"key": "nested", "label": "nested virt", "type": "bool",
+             "value": False, "help": OPTION_HELP["nested"], "risky": True},
+            {"key": "start", "label": "start now", "type": "bool",
+             "value": True, "help": OPTION_HELP["start"]},
+        ]
+        got = ui.form(self.stdscr, f"New box: {name}", fields,
+                      note="Every option is shown with its default. "
+                           "Enter changes the highlighted one, C creates.")
+        if got is None:
             return
 
         spec = BoxSpec(name=name, image=image, memory=memory, disk=disk,
@@ -529,6 +567,29 @@ class App:
             self.status = f"Rolled back to {res.index} ({res.label})"
         self.refresh_boxes()
 
+    def act_nested(self) -> None:
+        box = self.current
+        if not box:
+            return
+        want = not box.spec.nested
+        if want and not ui.confirm(
+            self.stdscr, "Enable nested virtualisation",
+            f"Let {box.name} run its own virtual machines?\n\n"
+            + OPTION_HELP["nested"],
+            danger=True,
+        ):
+            return
+        def apply_it():
+            b = boxlib.load(box.name)
+            b.spec.nested = want
+            boxlib.save_spec(b.spec)
+            return boxlib.apply(box.name)
+        self.task("Applying", apply_it,
+                  "Regenerating the domain. A running box restarts.")
+        self.status = (f"{box.name}: nested virtualisation "
+                       f"{'enabled' if want else 'disabled'}")
+        self.refresh_boxes()
+
     def act_password(self) -> None:
         box = self.current
         if not box:
@@ -674,6 +735,7 @@ class App:
             ("Re-mount shared folders", "mount"),
             ("Reseed: repair a box that refuses ssh", "reseed"),
             ("Set the agent's sudo rights", "sudo"),
+            ("Toggle nested virtualisation", "nested"),
             ("Show the sudo password", "password"),
             ("Build a golden image...", "golden"),
             ("Ensure management network", "net"),
@@ -687,7 +749,7 @@ class App:
             "snap": self.act_snapshot, "view": self.act_view,
             "edit": self.act_edit, "del": self.act_delete, "help": self.act_help,
             "reseed": self.act_reseed, "sudo": self.act_sudo,
-            "password": self.act_password,
+            "password": self.act_password, "nested": self.act_nested,
         }
         if choice in actions:
             actions[choice]()

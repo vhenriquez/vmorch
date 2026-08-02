@@ -57,6 +57,28 @@ def handled_values() -> set[str]:
             | set(re.findall(r'elif choice == "([a-z]+)"', body)))
 
 
+#: CLI option -> the TUI field that provides it, where the names differ.
+#: `--no-start` is inverted in the TUI ("start now"), because a form of
+#: positive toggles reads better than a negative one.
+FLAG_FIELDS = {"--no-start": "start"}
+
+
+def report(label: str, missing: set[str]) -> int:
+    if missing:
+        print(f"  FAIL {label}: {', '.join(sorted(missing))}")
+        return 1
+    print(f"  ok   {label}")
+    return 0
+
+
+def cli_new_flags() -> set[str]:
+    """Options on `vm new`. Every one must be settable from the TUI."""
+    import re as _re
+    cli = (ROOT / "vmorch" / "cli.py").read_text()
+    block = _re.search(r"new = sub\.add_parser.*?new\.set_defaults", cli, _re.S)
+    return set(_re.findall(r'add_argument\("(--[a-z-]+)"', block.group(0)))
+
+
 def cli_commands() -> set[str]:
     cli = (ROOT / "vmorch" / "cli.py").read_text()
     return set(re.findall(r'sub\.add_parser\(\s*"([a-z]+)"', cli))
@@ -98,6 +120,26 @@ def main() -> int:
         failures += 1
     else:
         print("  ok   every alias resolves to a real menu entry")
+
+    # Options, not just commands. --nested shipped CLI-only because nothing
+    # checked this, which is the whole reason the check exists.
+    tui = (ROOT / "vmorch" / "tui" / "app.py").read_text()
+    missing_flags = set()
+    for flag in cli_new_flags():
+        key = FLAG_FIELDS.get(flag, flag.lstrip("-").replace("-", "_"))
+        if f'"key": "{key}"' not in tui:
+            missing_flags.add(flag)
+    failures += report("every `vm new` option is settable in the TUI",
+                       missing_flags)
+
+    # And each must carry a description, so the TUI explains rather than lists.
+    undescribed = set()
+    for flag in cli_new_flags():
+        key = FLAG_FIELDS.get(flag, flag.lstrip("-").replace("-", "_"))
+        if f'"{key}":' not in tui.split("RISKY_WHEN_ON")[0]:
+            undescribed.add(flag)
+    failures += report("every option has a description in OPTION_HELP",
+                       undescribed)
 
     print("FAILED" if failures else "TUI menu is complete and wired")
     return 1 if failures else 0

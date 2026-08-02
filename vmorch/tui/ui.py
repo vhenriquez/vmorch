@@ -330,6 +330,74 @@ def choose(stdscr, title: str, options: list[tuple[str, object]],
             idx = (idx + 1) % len(labels)
 
 
+def form(stdscr, title: str, fields: list[dict], note: str = ""):
+    """A settings sheet: every option visible at once, edit any, then confirm.
+
+    Chosen over a chain of prompts because a wizard hides what it does not ask
+    about. Here the whole configuration is on screen, defaults included, so an
+    option nobody thought to change is still seen rather than silently applied.
+
+    Each field: {key, label, value, help, type: text|choice|bool, options}
+    Returns {key: value} or None if cancelled.
+    """
+    idx = 0
+    width = min(max(74, max(len(f["label"]) for f in fields) + 40),
+                stdscr.getmaxyx()[1] - 4)
+    while True:
+        body = _wrap(note, width - 6) if note else []
+        height = len(fields) + len(body) + 7
+        y, x, height, width_ = _centred_box(stdscr, height, width, title)
+
+        for i, line in enumerate(body):
+            put(stdscr, y + 1 + i, x + 3, line, attr(DIM))
+        top = y + 1 + len(body) + (1 if body else 0)
+
+        for i, f in enumerate(fields):
+            selected = i == idx
+            a = attr(SELECT, bold=True) if selected else attr(DIALOG)
+            value = f["value"]
+            shown = ("yes" if value else "no") if f["type"] == "bool" else str(value)
+            row = f"  {f['label']:<14} {shown}"
+            put(stdscr, top + i, x + 2, row.ljust(width_ - 4)[: width_ - 4], a)
+
+        # Help for the highlighted field only: enough to explain, never a wall.
+        help_text = _wrap(fields[idx].get("help", ""), width_ - 6)[:2]
+        for i, line in enumerate(help_text):
+            put(stdscr, top + len(fields) + i, x + 3,
+                line.ljust(width_ - 6)[: width_ - 6], attr(WARN, bold=True)
+                if fields[idx].get("risky") else attr(DIM))
+
+        put(stdscr, y + height - 2, x + 2,
+            "↑↓ move   Enter change   C create   Esc cancel", attr(DIM))
+        stdscr.refresh()
+
+        k = stdscr.getch()
+        if k == 27:
+            return None
+        if k in (ord("c"), ord("C")):
+            return {f["key"]: f["value"] for f in fields}
+        if k in (curses.KEY_UP, ord("k")):
+            idx = (idx - 1) % len(fields)
+        elif k in (curses.KEY_DOWN, ord("j")):
+            idx = (idx + 1) % len(fields)
+        elif k in (10, 13, ord(" ")):
+            f = fields[idx]
+            if f["type"] == "bool":
+                f["value"] = not f["value"]
+            elif f["type"] == "choice":
+                got = choose(stdscr, f["label"],
+                             [(o if isinstance(o, str) else o[0],
+                               o if isinstance(o, str) else o[1])
+                              for o in f["options"]],
+                             note=f.get("help", ""))
+                if got is not None:
+                    f["value"] = got
+            else:
+                got = prompt(stdscr, title, f["label"] + ":", str(f["value"]))
+                if got:
+                    f["value"] = got
+
+
 def pager(stdscr, title: str, text: str, line_attr=None,
           footer: str = "") -> None:
     """Scrollable read-only view, for console logs and long output.
