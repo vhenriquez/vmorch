@@ -24,7 +24,7 @@ import shutil
 import subprocess
 import tomllib
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from . import config
@@ -48,6 +48,10 @@ class CatalogueEntry:
     archive_member: str = ""
     #: A golden image built locally by `vm golden`. Nothing to download.
     local: bool = False
+    #: Hide a built-in entry you never want to see. The built-in catalogue is
+    #: compiled in, so this is the only way to get rid of one -- deleting its
+    #: base file frees the disk but the entry is still offered.
+    hidden: bool = False
     #: Known NOT to work, as opposed to merely untested. Kept separate from
     #: `verified` because "nobody has booted this yet" and "this is known to be
     #: broken" are very different things to tell someone.
@@ -137,11 +141,27 @@ EXAMPLE_USER_CATALOGUE = '''\
 #   os_variant = "kali"
 #   verified = false             # set true once you have booted it
 #
+# To hide a built-in image you never use, override it with hidden = true:
+#
+#   [debian-12]
+#   hidden = true
+#
 # A golden image built locally is added for you by `vm golden`.
 '''
 
 
 def load_user_catalogue() -> dict[str, CatalogueEntry]:
+    """Parse ~/vmorch/images.toml.
+
+    An entry naming a built-in **patches** it rather than replacing it. Writing
+
+        [debian-12]
+        hidden = true
+
+    should hide that image, not blank its url and checksum -- which is exactly
+    what building a fresh entry from the file alone did, leaving `vm new --image
+    debian-12` unable to download anything.
+    """
     if not USER_CATALOGUE.exists():
         return {}
     with open(USER_CATALOGUE, "rb") as fh:
@@ -151,21 +171,27 @@ def load_user_catalogue() -> dict[str, CatalogueEntry]:
     for key, raw in data.items():
         if not isinstance(raw, dict):
             continue
-        fields = {k: v for k, v in raw.items()
-                  if k in CatalogueEntry.__dataclass_fields__ and k != "key"}
-        fields.setdefault("description", key)
-        out[key] = CatalogueEntry(key=key, **fields)
+        overrides = {k: v for k, v in raw.items()
+                     if k in CatalogueEntry.__dataclass_fields__ and k != "key"}
+        base = CATALOGUE.get(key)
+        if base is not None:
+            out[key] = replace(base, **overrides)
+        else:
+            overrides.setdefault("description", key)
+            out[key] = CatalogueEntry(key=key, **overrides)
     return out
 
 
-def catalogue() -> dict[str, CatalogueEntry]:
+def catalogue(include_hidden: bool = False) -> dict[str, CatalogueEntry]:
     """Built-ins with the user's own entries merged over the top."""
     merged = dict(CATALOGUE)
     try:
         merged.update(load_user_catalogue())
     except Exception as exc:                          # noqa: BLE001
         raise ImageError(f"{USER_CATALOGUE}: {exc}") from None
-    return merged
+    if include_hidden:
+        return merged
+    return {k: v for k, v in merged.items() if not v.hidden}
 
 
 def register_local(key: str, description: str) -> None:
@@ -184,7 +210,7 @@ def register_local(key: str, description: str) -> None:
 
 
 def get(key: str) -> CatalogueEntry:
-    known = catalogue()
+    known = catalogue(include_hidden=True)
     try:
         return known[key]
     except KeyError:

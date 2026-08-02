@@ -56,10 +56,16 @@ def _die(msg: str) -> None:
 
 
 def cmd_images(args) -> None:
-    for key, entry in sorted(images.catalogue().items()):
-        mark = "cached" if entry.cached.exists() else "      "
-        base = "base" if images.base_path(entry).exists() else "    "
-        if entry.broken:
+    # This is a catalogue of what you CAN use, not an inventory of what is on
+    # disk -- built-in entries are always listed. The two columns say what is
+    # present locally.
+    print(f"  {'DOWNLOADED':<11}{'BASE':<6}{'STATUS':<8}{'NAME':<15}DESCRIPTION")
+    for key, entry in sorted(images.catalogue(include_hidden=args.all).items()):
+        mark = "yes" if entry.cached.exists() else "-"
+        base = "yes" if images.base_path(entry).exists() else "-"
+        if entry.hidden:
+            flag = "hidden"
+        elif entry.broken:
             flag = "BROKEN"
         elif entry.local:
             flag = "local "
@@ -67,7 +73,12 @@ def cmd_images(args) -> None:
             flag = "      "
         else:
             flag = "new?  "
-        print(f"  {mark} {base} {flag} {key:<14} {entry.description}")
+        print(f"  {mark:<11}{base:<6}{flag:<8}{key:<15}{entry.description}")
+
+    print("\n  DOWNLOADED = verified original in the cache"
+          f" ({config.DOWNLOAD_CACHE})"
+          f"\n  BASE       = ready to build boxes from ({config.BASES_DIR})"
+          "\n  STATUS     = local (you built it) · new? (untested) · BROKEN")
 
 
 def cmd_new(args) -> None:
@@ -346,8 +357,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = p.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("images", help="list the image catalogue").set_defaults(
-        func=cmd_images)
+    im = sub.add_parser("images", help="list the image catalogue")
+    im.add_argument("--all", action="store_true",
+                    help="include entries hidden in images.toml")
+    im.set_defaults(func=cmd_images)
 
     new = sub.add_parser("new", help="create a box")
     new.add_argument("name")
