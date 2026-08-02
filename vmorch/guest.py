@@ -21,15 +21,32 @@ class GuestError(RuntimeError):
     pass
 
 
-def run(name: str, script: str, check: bool = True) -> str:
-    """Execute a shell script inside the box as the agent user (via sudo)."""
-    proc = subprocess.run(
-        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", name,
-         "sudo", "bash", "-s"],
-        input=script,
-        capture_output=True,
-        text=True,
+def _ssh(target: str, argv: list[str], script: str):
+    return subprocess.run(
+        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", target, *argv],
+        input=script, capture_output=True, text=True,
     )
+
+
+def run(name: str, script: str, check: bool = True) -> str:
+    """Execute a shell script inside the box, with privilege.
+
+    Connects as **root over the tool's own key**, not as the agent user via
+    sudo. That separation is the point: the agent's privileges can be reduced to
+    nothing (`agent_sudo = "none"`) without breaking `vm share`, `vm service` or
+    `vm golden`, because the tool never depended on the agent being root.
+
+    Falls back to `agent` + sudo for boxes created before root access was
+    provisioned -- cloud-init runs once, so an older box has no root key until
+    it is reseeded.
+    """
+    proc = _ssh(f"root@{name}", ["bash", "-s"], script)
+
+    if proc.returncode == 255:          # ssh transport failure, not the script
+        legacy = _ssh(name, ["sudo", "bash", "-s"], script)
+        if legacy.returncode != 255:
+            proc = legacy
+
     if check and proc.returncode != 0:
         raise GuestError(
             f"in-guest command failed on {name} ({proc.returncode}): "

@@ -442,11 +442,30 @@ def reseed(name: str) -> Box:
                          allocation.wan_mac,
                          instance_id=f"{box.spec.domain}-{stamp}")
 
+    # Reseeding regenerates the box's ssh host keys, so the entry we already
+    # trust is about to become wrong. Left in place it produces "Host key
+    # verification failed" and the repair command leaves the box unreachable --
+    # the opposite of its job.
+    sshconf.forget_host(box.ip)
+
     if box.state == "running":
         _graceful_restart_stop(name)
     _ensure_console_log(name)
     _ensure_disk_perms(name)
     virsh.run("start", box.spec.domain)
+    return load(name)
+
+
+def set_sudo(name: str, mode: str) -> Box:
+    """Change what the agent user may do with sudo.
+
+    Only written to the spec here. The rule lives in a sudoers file that
+    cloud-init writes, and cloud-init runs once -- so this needs `vm reseed` to
+    reach the box. Saying so is the caller's job.
+    """
+    box = load(name)
+    box.spec.sudo = spec_mod._parse_sudo(mode)
+    save_spec(box.spec)
     return load(name)
 
 

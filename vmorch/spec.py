@@ -22,6 +22,7 @@ from pathlib import Path
 from . import config
 
 VALID_MODES = {"ro", "rw"}
+VALID_SUDO = {"nopasswd", "password", "none"}
 VALID_VIA_FROM_HOST = {"filter", "ssh", "vsock"}
 VALID_VIA_TO_HOST = {"direct", "ssh"}
 
@@ -70,6 +71,9 @@ class BoxSpec:
     memory: str = config.DEFAULT_MEMORY
     disk: str = config.DEFAULT_DISK
     user: str = config.DEFAULT_USER
+    #: What the agent user may do with sudo. Per box, because one box
+    #: may be doing package work while another only runs code.
+    sudo: str = config.AGENT_SUDO
     internet: bool = False
     lan: bool = False
     folders: list[Folder] = field(default_factory=list)
@@ -108,6 +112,17 @@ def _parse_mode(raw: object, tag: str) -> str:
             "Treating as 'ro'."
         )
     return raw.strip().lower()
+
+
+def _parse_sudo(raw: object) -> str:
+    if raw is None:
+        return config.AGENT_SUDO
+    value = str(raw).strip().lower()
+    if value not in VALID_SUDO:
+        raise SpecError(
+            f"sudo must be one of {sorted(VALID_SUDO)}, got {raw!r}"
+        )
+    return value
 
 
 def _parse_folder(raw: dict, index: int) -> Folder:
@@ -179,6 +194,7 @@ def parse(data: dict, name: str | None = None) -> BoxSpec:
         memory=str(data.get("memory", config.DEFAULT_MEMORY)),
         disk=str(data.get("disk", config.DEFAULT_DISK)),
         user=str(data.get("user", config.DEFAULT_USER)),
+        sudo=_parse_sudo(data.get("sudo")),
         internet=bool(network.get("internet", False)),
         lan=bool(network.get("lan", False)),
         folders=folders,
@@ -213,6 +229,7 @@ def dump(spec: BoxSpec) -> str:
         f'memory = "{spec.memory}"',
         f'disk = "{spec.disk}"',
         f'user = "{spec.user}"',
+        f'sudo = "{spec.sudo}"',
         "",
         "[network]",
         "# internet = true grants the PUBLIC internet only.",

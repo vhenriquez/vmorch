@@ -114,6 +114,12 @@ class App:
         net = ("internet + LAN" if s.lan else "internet only") if s.internet \
             else "isolated (no network out)"
         add(Row("info", f"network    {net}"))
+        sudo_text = {
+            "nopasswd": "passwordless (agent can become root)",
+            "password": "password required (secret on host)",
+            "none": "none (agent cannot escalate)",
+        }.get(s.sudo, s.sudo)
+        add(Row("info", f"sudo       {sudo_text}", warn=s.sudo == "nopasswd"))
 
         add(Row("header", ""))
         add(Row("header", f"Folders ({len(s.folders)})"))
@@ -523,6 +529,68 @@ class App:
             self.status = f"Rolled back to {res.index} ({res.label})"
         self.refresh_boxes()
 
+    def act_password(self) -> None:
+        box = self.current
+        if not box:
+            return
+        if box.spec.sudo != "password":
+            ui.message(self.stdscr, "No password",
+                       f"{box.name} is in sudo mode '{box.spec.sudo}', so no "
+                       "password is set.\n\nOnly 'password' mode uses one — it "
+                       "is generated on the host and never stored in readable "
+                       "form inside the box, which is what stops an agent "
+                       "process from using it.")
+            return
+        from .. import cloudinit
+        path = cloudinit.password_path(box.name)
+        if not path.exists():
+            ui.message(self.stdscr, "Not generated yet",
+                       f"Reseed {box.name} to generate its password.")
+            return
+        ui.message(self.stdscr, f"sudo password — {box.name}",
+                   f"{path.read_text().strip()}\n\nStored on the host at "
+                   f"{path}, mode 0600. The box holds only its hash.")
+
+    def act_sudo(self) -> None:
+        box = self.current
+        if not box:
+            return
+        mode = ui.choose(
+            self.stdscr, f"sudo for {box.name}", [
+                ("nopasswd — agent can become root at will", "nopasswd"),
+                ("password — secret kept on the host, not in the box", "password"),
+                ("none — agent cannot escalate at all", "none"),
+            ],
+            note=f"currently: {box.spec.sudo}. The agent owning its box is the "
+                 "premise, so this is defence in depth, not the boundary — the "
+                 "boundary is the VM.",
+        )
+        if mode is None or mode == box.spec.sudo:
+            return
+        if mode != "nopasswd" and not ui.confirm(
+            self.stdscr, "Reduce agent privilege",
+            f"Set {box.name} to sudo={mode}?\n\n"
+            "The agent will no longer be able to install packages or change "
+            "system config itself — bake what it needs into a golden image.\n\n"
+            "vmorch keeps its own root access, so shares, services and imaging "
+            "still work.",
+        ):
+            return
+
+        self.task("Saving", lambda: boxlib.set_sudo(box.name, mode))
+        self.refresh_boxes()
+        if ui.confirm(self.stdscr, "Apply now",
+                      "cloud-init only runs at first boot, so this takes effect "
+                      f"after a reseed.\n\nReseed {box.name} now? It restarts "
+                      "the box."):
+            self.task("Reseeding", lambda: boxlib.reseed(box.name),
+                      "Rebuilding the seed and restarting.")
+            self.status = f"{box.name} reseeded with sudo={mode}"
+        else:
+            self.status = (f"{box.name} set to sudo={mode} — takes effect after "
+                           f"`vm reseed {box.name}`")
+        self.refresh_boxes()
+
     def act_reseed(self) -> None:
         box = self.current
         if not box:
@@ -605,6 +673,8 @@ class App:
             ("Audit log: lookups and connections", "audit"),
             ("Re-mount shared folders", "mount"),
             ("Reseed: repair a box that refuses ssh", "reseed"),
+            ("Set the agent's sudo rights", "sudo"),
+            ("Show the sudo password", "password"),
             ("Build a golden image...", "golden"),
             ("Ensure management network", "net"),
             ("Destroy box                   F8", "del"),
@@ -616,7 +686,8 @@ class App:
             "share": self.act_share, "service": self.act_service,
             "snap": self.act_snapshot, "view": self.act_view,
             "edit": self.act_edit, "del": self.act_delete, "help": self.act_help,
-            "reseed": self.act_reseed,
+            "reseed": self.act_reseed, "sudo": self.act_sudo,
+            "password": self.act_password,
         }
         if choice in actions:
             actions[choice]()
@@ -772,6 +843,15 @@ DETAILS PANEL (right)
   F8               revoke whatever the cursor is on: a shared folder,
                    a granted service
   Enter            on a snapshot row, roll back to it
+
+PRIVILEGE
+  The right panel shows each box's sudo mode. "passwordless" is
+  highlighted because it means an unprivileged compromise inside the box
+  is one step from root. F9 -> "Set the agent's sudo rights" changes it;
+  it takes effect after a reseed, which the dialog offers to do.
+
+  vmorch keeps its own root access over a separate key, so reducing the
+  agent's privileges never breaks shares, services or imaging.
 
 RECOVERY
   A box that pings but refuses ssh has usually lost its ssh host keys:

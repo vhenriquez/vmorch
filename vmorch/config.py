@@ -145,6 +145,26 @@ DEFAULT_USER = _value("default_user", "agent")   # shared across all boxes
 DEFAULT_IMAGE = _value("default_image", "ubuntu-24.04")
 
 # Snapshot layers above the box overlay. Creating a 4th commits the oldest down.
+#: What the agent user gets for privilege escalation inside its own box.
+#:
+#:   "nopasswd"  passwordless sudo to root (default). The agent owns the box,
+#:               which is the premise -- the boundary is the VM, not in-guest
+#:               privilege.
+#:   "none"      no sudo at all. Raises an unprivileged in-guest compromise
+#:               (a hostile dependency, a prompt injection) from one step to
+#:               root into two, which matters because most paths at the
+#:               hypervisor need kernel context. Costs the agent the ability to
+#:               install packages itself -- bake them into a golden image.
+#:
+#: A password-protected sudo is deliberately NOT offered: the password would
+#: have to be reachable by the agent, which makes it decoration, or not, which
+#: is "none" with worse failure modes.
+#:
+#: vmorch keeps its own root path either way, so `vm share`, `vm service` and
+#: `vm golden` work in both modes. Changing this on an existing box needs
+#: `vm reseed` -- cloud-init only runs at first boot.
+AGENT_SUDO = _value("agent_sudo", "nopasswd")
+
 #: Emit a <vsock> device on every box. It was added so `via: vsock` service
 #: sharing could be turned on later without a stop/start -- but that mechanism
 #: is not built, so today it is a host<->guest transport nothing uses. Set false

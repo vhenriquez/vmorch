@@ -98,6 +98,7 @@ def cmd_new(args) -> None:
         disk=args.disk,
         internet=args.internet,
         lan=args.lan,
+        sudo=args.sudo,
     )
     print(f"creating {box_spec.name} from {box_spec.image} ...")
     box = boxes.create(box_spec, start=not args.no_start)
@@ -134,6 +135,7 @@ def cmd_show(args) -> None:
     print(f"resources {s.cpus} cpu, {s.memory} ram, {s.disk} disk")
     print(f"address   {box.ip}   (vsock cid {box.cid})")
     print(f"network   internet={s.internet} lan={s.lan}")
+    print(f"sudo      {_sudo_label(s.sudo)}")
 
     print("\nfolders")
     if not s.folders:
@@ -158,6 +160,39 @@ def cmd_show(args) -> None:
     for svc in s.to_host:
         print(f"  box->host  {svc.name:<12} guest:{svc.guest_port} -> "
               f"host:{svc.host_port}  via {svc.via}")
+
+
+SUDO_LABELS = {
+    "nopasswd": "passwordless — the agent can become root at will",
+    "password": "password required — secret held on the host, not in the box",
+    "none":     "no sudo — the agent cannot escalate",
+}
+
+
+def _sudo_label(mode: str) -> str:
+    return f"{mode}  ({SUDO_LABELS.get(mode, '?')})"
+
+
+def cmd_sudo(args) -> None:
+    box = boxes.load(args.name)
+    if not args.mode:
+        print(f"{box.name}: {_sudo_label(box.spec.sudo)}")
+        return
+    box = boxes.set_sudo(args.name, args.mode)
+    print(f"{box.name}: sudo set to {_sudo_label(box.spec.sudo)}")
+    print("  cloud-init only runs at first boot, so this takes effect after")
+    print(f"  `vm reseed {box.name}`.")
+
+
+def cmd_password(args) -> None:
+    from . import cloudinit
+    box = boxes.load(args.name)
+    if box.spec.sudo != "password":
+        _die(f"{box.name} is in sudo mode {box.spec.sudo!r}; no password is set")
+    path = cloudinit.password_path(args.name)
+    if not path.exists():
+        _die(f"no password stored yet; reseed {box.name} to generate one")
+    print(path.read_text().strip())
 
 
 def cmd_apply(args) -> None:
@@ -435,6 +470,9 @@ def build_parser() -> argparse.ArgumentParser:
                      help="grant the public internet (not the LAN)")
     new.add_argument("--lan", action="store_true",
                      help="also grant local network access")
+    new.add_argument("--sudo", default=config.AGENT_SUDO,
+                     choices=sorted(spec_mod.VALID_SUDO),
+                     help="agent's sudo: nopasswd (default), password, none")
     new.add_argument("--no-start", action="store_true")
     new.set_defaults(func=cmd_new)
 
@@ -525,6 +563,16 @@ def build_parser() -> argparse.ArgumentParser:
     cf.add_argument("--write", action="store_true",
                     help="write a commented starter config file")
     cf.set_defaults(func=cmd_config)
+
+    sd = sub.add_parser("sudo", help="show or change the agent's sudo rights")
+    sd.add_argument("name")
+    sd.add_argument("mode", nargs="?", choices=sorted(spec_mod.VALID_SUDO))
+    sd.set_defaults(func=cmd_sudo)
+
+    pw = sub.add_parser("password",
+                        help="print the sudo password (password mode only)")
+    pw.add_argument("name")
+    pw.set_defaults(func=cmd_password)
 
     mt = sub.add_parser("mount", help="re-mount a box's shared folders")
     mt.add_argument("name")

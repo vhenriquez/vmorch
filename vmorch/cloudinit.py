@@ -16,6 +16,7 @@ this tool out of files it has no business reading.
 
 from __future__ import annotations
 
+import secrets
 import subprocess
 from pathlib import Path
 
@@ -23,6 +24,26 @@ from . import config
 from .spec import BoxSpec
 
 SSH_KEY = config.SSH_DIR / "vmorch_ed25519"
+
+
+def password_path(name: str) -> Path:
+    return config.BOXES_DIR / name / "sudo-password"
+
+
+def box_password(name: str) -> str:
+    """The sudo password for a box, generated once and kept on the host.
+
+    Host-side on purpose: the guest gets only its hash, so an agent inside the
+    box cannot read the secret it would need to escalate.
+    """
+    path = password_path(name)
+    if path.exists():
+        return path.read_text().strip()
+    secret = secrets.token_urlsafe(18)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(secret + "\n")
+    path.chmod(0o600)
+    return secret
 
 
 def ensure_keypair() -> Path:
@@ -39,6 +60,21 @@ def ensure_keypair() -> Path:
     return pub
 
 
+def _sudoers_line(spec: BoxSpec) -> str:
+    """The one sudoers rule for the agent user.
+
+    "password" is deliberately *not* the same as "the agent can escalate": the
+    password is generated host-side and never placed in the guest in readable
+    form, so an agent process that is compromised cannot use it. A human who
+    needs to fix something can, with `vm password <box>`.
+    """
+    if spec.sudo == "nopasswd":
+        return f"{spec.user} ALL=(ALL) NOPASSWD:ALL"
+    if spec.sudo == "password":
+        return f"{spec.user} ALL=(ALL) ALL"
+    return f"# {spec.user}: no sudo (vmorch agent_sudo = none)"
+
+
 def user_data(spec: BoxSpec) -> str:
     pub = ensure_keypair().read_text().strip()
 
@@ -50,16 +86,40 @@ def user_data(spec: BoxSpec) -> str:
         "",
         "users:",
         f"  - name: {spec.user}",
-        "    sudo: ALL=(ALL) NOPASSWD:ALL",
+    ]
+    # NOT cloud-init's `sudo:` key. It adds an entry but does not remove one
+    # that is already there, and a golden image carries whatever sudoers file
+    # it was built with -- so `sudo: false` on an image built with NOPASSWD
+    # leaves the agent fully privileged. Verified: it did exactly that.
+    # The rule is written explicitly below instead, and the image's own file
+    # deleted, so the outcome does not depend on what the image shipped.
+    lines += [
         "    shell: /bin/bash",
         "    lock_passwd: true",
+        "    ssh_authorized_keys:",
+        f"      - {pub}",
+        "",
+        # The tool's own privileged path, independent of whatever the agent
+        # user is allowed. Key-only, and the private half never leaves the
+        # host, so the agent cannot use this entry even though it can read
+        # nothing of it. Without this, taking sudo away from the agent would
+        # also break `vm share`, `vm service` and `vm golden`.
+        "  - name: root",
         "    ssh_authorized_keys:",
         f"      - {pub}",
         "",
         # The agent owns the box completely; root there is expected, not a
         # concern. The boundary is the VM, not in-guest privilege.
         "ssh_pwauth: false",
-        "disable_root: true",
+        "",
+        "write_files:",
+        "  - path: /etc/sudoers.d/90-vmorch-agent",
+        "    permissions: '0440'",
+        "    content: |",
+        f"      {_sudoers_line(spec)}",
+        "",
+        # root login by key only, and only from the management network.
+        "disable_root: false",
         "",
     ]
 
@@ -67,6 +127,18 @@ def user_data(spec: BoxSpec) -> str:
         lines.append("packages:")
         lines += [f"  - {p}" for p in spec.packages]
         lines.append("")
+
+    runcmds = [
+        # Whatever the image baked in must go, or the explicit rule above is
+        # merely additive and the old NOPASSWD entry still wins.
+        "  - [rm, -f, /etc/sudoers.d/90-cloud-init-users]",
+    ]
+    if spec.sudo == "password":
+        runcmds.append(f"  - [bash, -c, \"echo '{spec.user}:{box_password(spec.name)}' "
+                       "| chpasswd\"]")
+    else:
+        runcmds.append(f"  - [passwd, -l, {spec.user}]")
+    lines += ["runcmd:", *runcmds, ""]
 
     if spec.folders:
         # Mount ro for read-only shares as well as marking <readonly/> in the
@@ -81,7 +153,6 @@ def user_data(spec: BoxSpec) -> str:
             )
         lines.append("")
 
-        lines.append("runcmd:")
         for f in spec.folders:
             lines.append(f"  - [mkdir, -p, /mnt/{f.tag}]")
         lines.append("  - [mount, -a]")
