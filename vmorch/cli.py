@@ -11,6 +11,45 @@ from . import (boxes, config, consoletext, golden, images, network,
 from .spec import BoxSpec
 
 
+EXAMPLE_CONFIG = """\
+# vmorch configuration. Every key is optional; delete what you do not need.
+# Applies to both `vm` and `vmtui`. Show the effective values with `vm config`.
+
+# --- storage -----------------------------------------------------------------
+# Golden images and box overlays. These must be on FAST storage: a qcow2 chain
+# reads unmodified blocks from the base on every access, so a base on a spinning
+# disk makes every box slow for its whole life.
+#
+# They must also NOT contain a hidden directory component. AppArmor denies
+# virt-aa-helper any dot-directory, so a box under one fails to start with a
+# bare "Permission denied". vmorch refuses such a path rather than let you
+# discover that later.
+# state_dir      = "~/vmorch"
+# bases_dir      = "~/vmorch/bases"
+# boxes_dir      = "~/vmorch/boxes"
+
+# Verified downloads, kept so a rebuild needs no network. Cold and written once,
+# so a slow disk is the right place for it.
+# download_cache = "~/vmorch/cloud_images"
+
+# --- defaults for `vm new` ---------------------------------------------------
+# default_image  = "ubuntu-24.04"
+# default_cpus   = 4
+# default_memory = "8G"
+# default_disk   = "40G"
+# default_user   = "agent"
+
+# Snapshot layers kept per box. A fourth commits the oldest into the base.
+# max_snapshot_layers = 3
+
+# --- network -----------------------------------------------------------------
+# Only change these BEFORE creating any box: existing boxes hold reserved
+# addresses on the old subnet and would be stranded.
+# mgmt_subnet    = "192.168.150.0/24"
+# mgmt_gateway   = "192.168.150.1"
+"""
+
+
 def _die(msg: str) -> None:
     print(f"error: {msg}", file=sys.stderr)
     raise SystemExit(1)
@@ -238,6 +277,61 @@ def cmd_reseed(args) -> None:
           "and mounts")
 
 
+def _dir_size(path) -> str:
+    if not path.exists():
+        return "-"
+    total = sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+    return f"{total / 1024**3:.1f}G"
+
+
+def _free(path) -> str:
+    """Free space on the filesystem that would hold `path`.
+
+    Walks up to the first directory that exists: a configured path is often not
+    created yet, and "?" is unhelpful when the whole point is to tell you
+    whether there is room for it.
+    """
+    import shutil as _sh
+    probe = path
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    try:
+        return f"{_sh.disk_usage(probe).free / 1024**3:.0f}G free"
+    except OSError:
+        return "?"
+
+
+def cmd_config(args) -> None:
+    import shutil as _sh
+    print(f"config file   {config.CONFIG_FILE}"
+          f"{'' if config.CONFIG_FILE.exists() else '   (not present; using defaults)'}")
+    print()
+    print("storage")
+    for label, path in (("bases", config.BASES_DIR),
+                        ("boxes", config.BOXES_DIR),
+                        ("cache", config.DOWNLOAD_CACHE)):
+        print(f"  {label:<8} {str(path):<44} {_dir_size(path):>7}  {_free(path)}")
+    print()
+    print("defaults")
+    for label, val in (("image", config.DEFAULT_IMAGE),
+                       ("cpus", config.DEFAULT_CPUS),
+                       ("memory", config.DEFAULT_MEMORY),
+                       ("disk", config.DEFAULT_DISK),
+                       ("user", config.DEFAULT_USER),
+                       ("snapshot layers", config.MAX_SNAPSHOT_LAYERS)):
+        print(f"  {label:<16} {val}")
+    print()
+    print("network")
+    print(f"  management     {config.MGMT_SUBNET}  gateway {config.MGMT_GATEWAY}")
+
+    if args.write and not config.CONFIG_FILE.exists():
+        config.CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        config.CONFIG_FILE.write_text(EXAMPLE_CONFIG)
+        print(f"\nwrote a commented starter config to {config.CONFIG_FILE}")
+    elif args.write:
+        print(f"\n{config.CONFIG_FILE} already exists; not overwriting")
+
+
 def cmd_net(args) -> None:
     created = network.ensure_base()
     print(f"management network {config.MGMT_NET}: "
@@ -338,6 +432,11 @@ def build_parser() -> argparse.ArgumentParser:
                         help="re-run first-boot config to repair a box")
     rs.add_argument("name")
     rs.set_defaults(func=cmd_reseed)
+
+    cf = sub.add_parser("config", help="show paths, defaults and disk usage")
+    cf.add_argument("--write", action="store_true",
+                    help="write a commented starter config file")
+    cf.set_defaults(func=cmd_config)
 
     mt = sub.add_parser("mount", help="re-mount a box's shared folders")
     mt.add_argument("name")

@@ -5,7 +5,43 @@ docs/host-capability-check.md
 for why each one is what it is.
 """
 
+import os
+import tomllib
 from pathlib import Path
+
+# --- user configuration ------------------------------------------------------
+#
+# Everything below can be overridden from a TOML file. It deliberately does NOT
+# live in the state directory, because the state directory is one of the things
+# it configures.
+
+CONFIG_FILE = Path(
+    os.environ.get("VMORCH_CONFIG",
+                   Path.home() / ".config" / "vmorch" / "config.toml")
+)
+
+
+def _load() -> dict:
+    if not CONFIG_FILE.exists():
+        return {}
+    try:
+        with open(CONFIG_FILE, "rb") as fh:
+            return tomllib.load(fh)
+    except Exception as exc:                          # noqa: BLE001
+        raise SystemExit(f"config error: {CONFIG_FILE}: {exc}")
+
+
+_CFG = _load()
+
+
+def _path(key: str, default: Path) -> Path:
+    raw = _CFG.get(key)
+    return Path(str(raw)).expanduser() if raw else default
+
+
+def _value(key: str, default):
+    got = _CFG.get(key, default)
+    return type(default)(got) if not isinstance(got, type(default)) else got
 
 # --- domains -----------------------------------------------------------------
 
@@ -21,8 +57,8 @@ LIBVIRT_URI = "qemu:///system"
 # also carries 192.168.4.0/24 and libvirt's default 192.168.122.0/24.
 MGMT_NET = "vmorch-mgmt"
 MGMT_BRIDGE = "virbr-vmorch"          # 12 chars, under the 15-char IFNAMSIZ limit
-MGMT_SUBNET = "192.168.150.0/24"
-MGMT_GATEWAY = "192.168.150.1"
+MGMT_SUBNET = _value("mgmt_subnet", "192.168.150.0/24")
+MGMT_GATEWAY = _value("mgmt_gateway", "192.168.150.1")
 MGMT_NETMASK = "255.255.255.0"
 MGMT_DHCP_START = "192.168.150.10"
 MGMT_DHCP_END = "192.168.150.254"
@@ -66,12 +102,25 @@ CID_FIRST = 100
 # cannot read a disk image, qemu never gets permission for it and the box fails
 # to start with a bare "Permission denied" that looks like a DAC problem and is
 # not. Any dot-directory under $HOME is off limits; a visible one is fine.
-STATE_DIR = Path.home() / "vmorch"                        # NVMe, non-hidden
-BOXES_DIR = STATE_DIR / "boxes"
-BASES_DIR = STATE_DIR / "bases"                            # golden images, NVMe
+STATE_DIR = _path("state_dir", Path.home() / "vmorch")     # NVMe, non-hidden
+BASES_DIR = _path("bases_dir", STATE_DIR / "bases")        # golden images, NVMe
+BOXES_DIR = _path("boxes_dir", STATE_DIR / "boxes")
 ALLOC_FILE = STATE_DIR / "allocations.json"
 
-DOWNLOAD_CACHE = Path("~/vmorch/cloud_images")  # HDD, cold
+DOWNLOAD_CACHE = _path("download_cache",
+                       Path("~/vmorch/cloud_images"))  # HDD, cold
+
+# The AppArmor rule above is not advice, it is a hard constraint, so anything
+# holding a disk image is checked rather than trusted.
+for _label, _dir in (("state_dir", STATE_DIR), ("bases_dir", BASES_DIR),
+                     ("boxes_dir", BOXES_DIR)):
+    if any(part.startswith(".") for part in _dir.parts):
+        raise SystemExit(
+            f"config error: {_label} = {_dir}\n"
+            "  A path with a hidden component cannot hold VM disks: AppArmor\n"
+            "  denies virt-aa-helper any dot-directory, so boxes fail to start\n"
+            f"  with a bare 'Permission denied'. Edit {CONFIG_FILE}."
+        )
 
 # --- ssh ---------------------------------------------------------------------
 
@@ -84,16 +133,16 @@ SSH_INCLUDE_LINE = "Include config.d/vmorch"
 
 # --- defaults ----------------------------------------------------------------
 
-DEFAULT_CPUS = 4
-DEFAULT_MEMORY = "8G"
-DEFAULT_DISK = "40G"
-DEFAULT_USER = "agent"          # one shared agent user across all boxes
+DEFAULT_CPUS = _value("default_cpus", 4)
+DEFAULT_MEMORY = _value("default_memory", "8G")
+DEFAULT_DISK = _value("default_disk", "40G")
+DEFAULT_USER = _value("default_user", "agent")   # shared across all boxes
 # Ubuntu, not Debian. The debian-12-genericcloud image was tested on 2026-07-31
 # and cloud-init never runs on it: zero cloud-init units in the boot, hostname
 # left at "localhost", and ssh.service fails because no host keys are generated.
 # The identical seed ISO drives Ubuntu 24.04 correctly, so the pipeline is fine
 # and the image is not. See the catalogue note in images.py.
-DEFAULT_IMAGE = "ubuntu-24.04"
+DEFAULT_IMAGE = _value("default_image", "ubuntu-24.04")
 
 # Snapshot layers above the box overlay. Creating a 4th commits the oldest down.
-MAX_SNAPSHOT_LAYERS = 3
+MAX_SNAPSHOT_LAYERS = _value("max_snapshot_layers", 3)

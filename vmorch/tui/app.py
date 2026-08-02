@@ -601,6 +601,7 @@ class App:
             ("View console log              F3", "view"),
             ("Edit box spec                 F4", "edit"),
             ("Image catalogue", "images"),
+            ("Configuration and disk usage", "config"),
             ("Re-mount shared folders", "mount"),
             ("Reseed: repair a box that refuses ssh", "reseed"),
             ("Build a golden image...", "golden"),
@@ -644,6 +645,15 @@ class App:
                        "into it and flattens the result. It takes several "
                        "minutes and is best watched, so run it from the CLI:\n\n"
                        "  vm golden agent-base --packages tmux,git")
+        elif choice == "config":
+            import io
+            import contextlib
+            from .. import cli as _cli
+
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                _cli.cmd_config(type("A", (), {"write": False})())
+            ui.pager(self.stdscr, "Configuration", buf.getvalue())
         elif choice == "net":
             res = self.task("Network", network.ensure_base)
             if res is not None:
