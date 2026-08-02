@@ -379,6 +379,15 @@ def cmd_config(args) -> None:
     print()
     print("network")
     print(f"  management     {config.MGMT_SUBNET}  gateway {config.MGMT_GATEWAY}")
+    from . import alloc as _alloc
+    entries = _alloc.all_allocations()
+    live = sum(1 for e in entries if not e.released)
+    pool = config.ALLOC_IP_LAST - config.ALLOC_IP_FIRST + 1
+    print(f"  addresses      {live} in use, {len(entries) - live} held in "
+          f"reserve, {pool - len(entries)} never used  (pool {pool})")
+    if len(entries) >= pool:
+        print("                 pool full — the address released longest ago "
+              "is recycled on the next box")
 
     if args.write and not config.CONFIG_FILE.exists():
         config.CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -442,6 +451,12 @@ def cmd_audit(args) -> None:
 
 
 def cmd_net(args) -> None:
+    if args.prune:
+        live = {b.name for b in boxes.list_boxes()}
+        removed = network.prune_reservations(live)
+        print(f"removed {len(removed)} stale DHCP reservation(s)"
+              + (f": {', '.join(removed)}" if removed else ""))
+        return
     created = network.ensure_base()
     print(f"management network {config.MGMT_NET}: "
           f"{'created' if created else 'already present'}")
@@ -607,8 +622,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="keep control codes even when piped")
     lg.set_defaults(func=cmd_logs)
 
-    sub.add_parser("net", help="ensure the management network exists").set_defaults(
-        func=cmd_net)
+    nt = sub.add_parser("net", help="ensure the management network exists")
+    nt.add_argument("--prune", action="store_true",
+                    help="drop DHCP reservations for boxes that no longer exist")
+    nt.set_defaults(func=cmd_net)
 
     return p
 

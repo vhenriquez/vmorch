@@ -329,8 +329,9 @@ def stop(name: str, force: bool = False) -> None:
 
 
 def destroy(name: str, keep_disk: bool = False) -> None:
-    """Remove a box. Its identifiers stay burned -- see alloc.py."""
+    """Remove a box, and everything the host was holding for it."""
     box = load(name)
+    allocation = alloc.allocate(name)
 
     if virsh.domain_exists(box.spec.domain):
         if virsh.domain_state(box.spec.domain) == "running":
@@ -343,6 +344,7 @@ def destroy(name: str, keep_disk: bool = False) -> None:
         shutil.rmtree(box_dir(name), ignore_errors=True)
 
     services.delete_box_filter(name)
+    network.unreserve_address(name, allocation.mac, box.ip)
     alloc.release(name)
     _regenerate_ssh()
 

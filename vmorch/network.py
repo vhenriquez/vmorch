@@ -303,6 +303,35 @@ def dns_logging_enabled() -> bool:
         return False
 
 
+def unreserve_address(name: str, mac: str, ip: str) -> None:
+    """Drop a box's DHCP reservation.
+
+    Without this the reservation outlives the box, so the network accumulates
+    entries for boxes that no longer exist and the address cannot be handed to
+    anything else -- dnsmasq would offer it to a MAC that will never ask again.
+    """
+    host_xml = f"<host mac='{mac}' name='{name}' ip='{ip}'/>"
+    try:
+        virsh.run("net-update", config.MGMT_NET, "delete", "ip-dhcp-host",
+                  host_xml, "--live", "--config", "--parent-index", "0")
+    except virsh.VirshError as exc:
+        if "no matching" not in exc.stderr.lower():
+            raise
+
+
+def prune_reservations(live_names: set[str]) -> list[str]:
+    """Remove reservations for boxes that no longer exist. Returns what went."""
+    import re as _re
+    xml = virsh.run("net-dumpxml", "--inactive", config.MGMT_NET)
+    removed = []
+    for mac, name, ip in _re.findall(
+            r"<host mac='([^']+)' name='([^']+)' ip='([^']+)'/>", xml):
+        if name not in live_names:
+            unreserve_address(name, mac, ip)
+            removed.append(name)
+    return removed
+
+
 def ensure_base() -> bool:
     """Bring up everything a box needs before it can be defined."""
     created = ensure_mgmt_network()

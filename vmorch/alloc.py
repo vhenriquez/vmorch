@@ -7,12 +7,21 @@ host key warning fires every time. The allocation is recorded once and reused
 for that name forever.
 
 **No CID reuse, ever.** If a deleted box's context ID were handed to a new box,
-a stale host-side vsock relay would happily serve the wrong box. Deleting a box
-therefore releases nothing: the record is tombstoned, not removed. IPs follow
-the same rule for the same reason (a stale ssh config entry or known_hosts line
-pointing at a recycled address is the same class of bug).
+a stale host-side vsock relay would serve the wrong box. The space is 32-bit, so
+there is no reason to recycle: CIDs only ever go up.
 
-The ledger is append-only. That is the point.
+**Addresses are held in reserve, then reclaimed.** Destroying a box tombstones
+its address rather than freeing it, so recreating a box under the same name gets
+the same address back and `ssh <name>` keeps working. But the pool is one /24 —
+245 usable — and never reclaiming would turn that into a hard lifetime limit on
+how many boxes may ever be created. So when nothing fresh is left, the address
+of the box destroyed longest ago is reused. Stability where it is cheap,
+recycling only when it is needed.
+
+Reuse is only safe because destroy now cleans up after itself: the DHCP
+reservation is removed, the known_hosts entry dropped, the ssh config fragment
+regenerated and the per-box filter deleted. Leave any of those behind and a
+recycled address points at a ghost.
 """
 
 from __future__ import annotations
@@ -29,7 +38,8 @@ class Allocation:
     ip: str
     mac: str
     cid: int
-    released: bool = False   # tombstone: box gone, identifiers still burned
+    released: bool = False   # tombstone: box gone, address held in reserve
+    released_at: str = ""    # when, so the oldest is reclaimed first
 
     @property
     def wan_mac(self) -> str:
@@ -107,15 +117,30 @@ def allocate(name: str) -> Allocation:
          if o not in used_octets),
         None,
     )
-    if octet is None:
-        raise AllocationError(
-            f"no free address in {config.MGMT_SUBNET}; "
-            f"{len(used_octets)} allocated (tombstones included, by design)"
-        )
 
-    cid = config.CID_FIRST
-    while cid in used_cids:
-        cid += 1
+    if octet is None:
+        # Pool exhausted: reclaim the address of the box destroyed longest ago.
+        # Held in reserve rather than freed on destroy so that recreating a box
+        # keeps its address, but a finite pool cannot hold them forever -- 245
+        # addresses is a few months of disposable boxes, not a lifetime.
+        tombstones = sorted(
+            (e for e in allocations.values() if e.get("released")),
+            key=lambda e: e.get("released_at", ""),
+        )
+        if not tombstones:
+            raise AllocationError(
+                f"no free address in {config.MGMT_SUBNET}: "
+                f"{len(used_octets)} in use and none released. Destroy a box, "
+                "or widen the range in config."
+            )
+        oldest = tombstones[0]
+        octet = int(oldest["ip"].rsplit(".", 1)[1])
+        del allocations[oldest["name"]]
+
+    # CIDs are never recycled even when an address is. The space is 32-bit, so
+    # there is no pressure, and a stale host-side vsock relay handed a
+    # different box would be a genuine confusion of identity.
+    cid = max(used_cids, default=config.CID_FIRST - 1) + 1
 
     prefix = config.MGMT_GATEWAY.rsplit(".", 1)[0]
     allocation = Allocation(
@@ -130,8 +155,17 @@ def allocate(name: str) -> Allocation:
 
 
 def release(name: str) -> None:
-    """Tombstone a box's allocation. The identifiers stay burned."""
+    """Tombstone a box's allocation.
+
+    Not freed immediately: recreating a box under the same name should get its
+    old address back, so `ssh <name>` keeps working and no known_hosts entry is
+    left pointing somewhere else. The address returns to the pool only when
+    nothing fresh is left -- see `allocate`.
+    """
+    from datetime import datetime
     data = _load()
     if name in data["allocations"]:
         data["allocations"][name]["released"] = True
+        data["allocations"][name]["released_at"] = datetime.now().isoformat(
+            timespec="seconds")
         _save(data)
