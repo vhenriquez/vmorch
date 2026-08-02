@@ -24,10 +24,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .. import boxes as boxlib
+from .. import virsh
 from .. import config, consoletext, images, network
 from ..spec import BoxSpec
 from . import ui
 from .ui import attr, frame, fill, put
+
+#: How often the box list re-checks run states, in milliseconds.
+POLL_MS = 1500
 
 KEYBAR = [
     ("1", "Help"), ("2", "Snap"), ("3", "View"), ("4", "Edit"), ("5", "Share"),
@@ -69,6 +73,26 @@ class App:
             self.status = f"Could not list boxes: {exc}"
         self.sel = min(self.sel, max(0, len(self.boxes) - 1))
         self.rebuild_rows()
+
+    def refresh_states(self) -> bool:
+        """Cheap poll: update just the run states. True if anything changed.
+
+        The panel used to go stale the moment anything happened that the TUI
+        did not itself do -- a graceful shutdown finishing ten seconds later, a
+        box started from another terminal or virt-manager. One virsh call keeps
+        it honest without re-reading every spec.
+        """
+        try:
+            states = virsh.all_domain_states()
+        except Exception:                              # noqa: BLE001
+            return False
+        changed = False
+        for box in self.boxes:
+            now = states.get(box.spec.domain, "absent")
+            if now != box.state:
+                box.state = now
+                changed = True
+        return changed
 
     @property
     def current(self) -> boxlib.Box | None:
@@ -613,8 +637,16 @@ class App:
     def loop(self) -> None:
         while True:
             self.draw()
+            # Re-applied every pass: run_task flips nodelay while it spins a
+            # worker, which clears the timeout on the way out.
+            self.stdscr.timeout(POLL_MS)
             k = self.stdscr.getch()
 
+            if k == -1:
+                # getch timed out: poll for state changes we did not cause.
+                if self.refresh_states():
+                    self.rebuild_rows()
+                continue
             if k == curses.KEY_RESIZE:
                 continue
             if k in (ord("\t"),):

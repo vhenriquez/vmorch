@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from . import (alloc, cloudinit, config, domain, guest, hostaccess, images,
@@ -149,6 +150,30 @@ def _ensure_disk_perms(name: str) -> None:
             continue
 
 
+def _graceful_restart_stop(name: str, timeout: int = 90) -> None:
+    """Shut a box down properly before rebuilding or reseeding it.
+
+    `virsh destroy` is a power cut. Using it to restart a box for a routine
+    reconfiguration risks whatever was mid-write -- and almost certainly did:
+    a box lost its ssh host keys this way, which makes ssh.service fail to
+    start, so the socket accepts a connection and immediately drops it. The
+    symptom is "Connection refused" on a box that pings fine, with nothing in
+    the console log to explain it.
+
+    Falls back to the power cut only if the guest ignores the request.
+    """
+    domain = config.DOMAIN_PREFIX + name
+    if virsh.domain_state(domain) != "running":
+        return
+    virsh.run("shutdown", domain, check=False)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if virsh.domain_state(domain) != "running":
+            return
+        time.sleep(2)
+    virsh.run("destroy", domain, check=False)
+
+
 def _bytes_of(size: str) -> int:
     text = size.strip().upper()
     units = {"G": 1024 ** 3, "M": 1024 ** 2, "K": 1024, "T": 1024 ** 4}
@@ -276,7 +301,7 @@ def apply(name: str) -> Box:
 
     was_running = box.state == "running"
     if was_running:
-        virsh.run("destroy", box.spec.domain)
+        _graceful_restart_stop(name)
 
     virsh.define_domain(xml)
     _regenerate_ssh()
@@ -395,6 +420,33 @@ def share(name: str, host_path: Path, tag: str | None = None,
         # Stopped: regenerate the domain so the device is there at next boot.
         apply(name)
 
+    return load(name)
+
+
+def reseed(name: str) -> Box:
+    """Make an existing box run its first-boot configuration again.
+
+    cloud-init only acts once per *instance*, identified by instance-id. Giving
+    the seed a fresh one makes the box look new to cloud-init, so it regenerates
+    ssh host keys, re-applies the agent user and its key, and redoes mounts.
+
+    The repair path for a box you can no longer ssh into. It re-applies what the
+    tool configured; it does not revert anything you changed inside the box, but
+    files cloud-init owns (netplan config, /etc/hosts) are rewritten.
+    """
+    box = load(name)
+    allocation = alloc.allocate(name)
+
+    stamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    cloudinit.build_seed(box.spec, box_dir(name), allocation.mac,
+                         allocation.wan_mac,
+                         instance_id=f"{box.spec.domain}-{stamp}")
+
+    if box.state == "running":
+        _graceful_restart_stop(name)
+    _ensure_console_log(name)
+    _ensure_disk_perms(name)
+    virsh.run("start", box.spec.domain)
     return load(name)
 
 

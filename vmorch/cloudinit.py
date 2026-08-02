@@ -90,10 +90,13 @@ def user_data(spec: BoxSpec) -> str:
     return "\n".join(lines)
 
 
-def meta_data(spec: BoxSpec) -> str:
-    # instance-id is what cloud-init uses to decide whether it has already run
-    # for this instance. Keyed to the box name so a rebuilt box re-runs setup.
-    return f"instance-id: {spec.domain}\nlocal-hostname: {spec.name}\n"
+def meta_data(spec: BoxSpec, instance_id: str | None = None) -> str:
+    # instance-id is what cloud-init uses to decide whether it has already run.
+    # Keyed to the box name so a rebuilt box re-runs setup -- and changing it is
+    # the supported way to make an EXISTING box run its first-boot config again,
+    # which is what `vm reseed` does to repair a box whose ssh has broken.
+    return (f"instance-id: {instance_id or spec.domain}\n"
+            f"local-hostname: {spec.name}\n")
 
 
 def network_config(spec: BoxSpec, mgmt_mac: str, wan_mac: str) -> str:
@@ -143,14 +146,15 @@ def network_config(spec: BoxSpec, mgmt_mac: str, wan_mac: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def build_seed(spec: BoxSpec, out_dir: Path, mgmt_mac: str, wan_mac: str) -> Path:
+def build_seed(spec: BoxSpec, out_dir: Path, mgmt_mac: str, wan_mac: str,
+               instance_id: str | None = None) -> Path:
     """Write a NoCloud seed ISO. Returns its path."""
     out_dir.mkdir(parents=True, exist_ok=True)
     ud = out_dir / "user-data"
     md = out_dir / "meta-data"
     nc = out_dir / "network-config"
     ud.write_text(user_data(spec))
-    md.write_text(meta_data(spec))
+    md.write_text(meta_data(spec, instance_id))
     nc.write_text(network_config(spec, mgmt_mac, wan_mac))
 
     seed = out_dir / "seed.iso"

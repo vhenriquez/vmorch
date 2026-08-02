@@ -72,6 +72,22 @@ def list_our_domains() -> list[str]:
     return [d for d in list_domains() if d.startswith(config.DOMAIN_PREFIX)]
 
 
+def all_domain_states() -> dict[str, str]:
+    """Every domain's state from ONE virsh call.
+
+    `domstate` per box means a process spawn per box; this is polled on a timer
+    by the TUI, so it has to be cheap enough to run every couple of seconds.
+    """
+    states: dict[str, str] = {}
+    out = run("list", "--all")
+    for line in out.splitlines():
+        parts = line.split(None, 2)
+        # rows look like:  Id   Name   State
+        if len(parts) >= 3 and (parts[0].isdigit() or parts[0] == "-"):
+            states[parts[1]] = parts[2].strip()
+    return states
+
+
 def domain_uuid(name: str) -> str | None:
     """The UUID libvirt holds for a domain, if it exists."""
     try:

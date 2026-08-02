@@ -231,6 +231,13 @@ def cmd_golden(args) -> None:
     print(f"use it with:  vm new mybox --image {args.name}")
 
 
+def cmd_reseed(args) -> None:
+    print(f"re-running first-boot configuration on {args.name} ...")
+    box = boxes.reseed(args.name)
+    print(f"  {box.name} restarting; cloud-init will re-apply user, ssh keys "
+          "and mounts")
+
+
 def cmd_net(args) -> None:
     created = network.ensure_base()
     print(f"management network {config.MGMT_NET}: "
@@ -326,6 +333,11 @@ def build_parser() -> argparse.ArgumentParser:
     rb.add_argument("name")
     rb.add_argument("index", type=int)
     rb.set_defaults(func=cmd_rollback)
+
+    rs = sub.add_parser("reseed",
+                        help="re-run first-boot config to repair a box")
+    rs.add_argument("name")
+    rs.set_defaults(func=cmd_reseed)
 
     mt = sub.add_parser("mount", help="re-mount a box's shared folders")
     mt.add_argument("name")
