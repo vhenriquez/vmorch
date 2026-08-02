@@ -31,6 +31,21 @@ from .spec import BoxSpec
 SPARE_PCI_PORTS = 12
 
 
+def _vsock_xml(cid: int) -> str:
+    """Host<->guest channel that does not use IP at all.
+
+    Inert until a relay listens, and CIDs are never reused so a stale host-side
+    relay cannot be handed a different box. Optional because nothing implemented
+    uses it yet -- see config.VSOCK_DEVICE.
+    """
+    if not config.VSOCK_DEVICE:
+        return ""
+    return f"""    <vsock model='virtio'>
+      <cid auto='no' address='{cid}'/>
+    </vsock>
+"""
+
+
 def _root_ports(count: int) -> str:
     """The PCIe root plus `count` spare ports hanging off it.
 
@@ -111,6 +126,12 @@ def _interfaces_xml(spec: BoxSpec, mac: str, wan_mac: str) -> str:
       <source network='{config.NAT_NET}'/>
       <mac address='{wan_mac}'/>
       <model type='virtio'/>
+      <!-- Isolated here as well as on the management bridge. Without it, boxes
+           share virbr0 at layer 2 with each other and with any other libvirt
+           guest, so one box could reach another's sshd directly. The RFC1918
+           drop hides that when lan = false, but a lan = true box had a real
+           path. -->
+      <port isolated='yes'/>
       <filterref filter='{wan_filter}'/>
     </interface>"""
         )
@@ -164,7 +185,13 @@ def build(spec: BoxSpec, disk_path: str, mac: str, wan_mac: str, cid: int,
     <apic/>
   </features>
 
-  <cpu mode='host-passthrough' check='none' migratable='on'/>
+  <!-- host-passthrough gives the guest every CPU feature the host has,
+       including vmx: nested virtualisation. A box that can run its own VMs
+       exposes a large amount of extra KVM code, and nothing here needs it. -->
+  <cpu mode='host-passthrough' check='none' migratable='on'>
+    <feature policy='disable' name='vmx'/>
+    <feature policy='disable' name='svm'/>
+  </cpu>
 
   <clock offset='utc'>
     <timer name='rtc' tickpolicy='catchup'/>
@@ -202,13 +229,7 @@ def build(spec: BoxSpec, disk_path: str, mac: str, wan_mac: str, cid: int,
 {seed}
 {filesystems}{_interfaces_xml(spec, mac, wan_mac)}
 
-    <!-- Host<->guest channel that does not use IP at all. Inert until a relay
-         listens. CIDs are never reused, so a stale host-side relay can never
-         be handed a different box. -->
-    <vsock model='virtio'>
-      <cid auto='no' address='{cid}'/>
-    </vsock>
-
+{_vsock_xml(cid)}
     <!-- Serial console on a pty, with libvirt tee-ing it to a log file.
 
          NOT <console type='file'>. That makes the log file libvirt's own
@@ -229,10 +250,6 @@ def build(spec: BoxSpec, disk_path: str, mac: str, wan_mac: str, cid: int,
       <log file='{console_log}' append='on'/>
       <target type='serial' port='0'/>
     </console>
-
-    <channel type='unix'>
-      <target type='virtio' name='org.qemu.guest_agent.0'/>
-    </channel>
 
     <!-- No clipboard, no SPICE agent, no shared display: those are the
          conveniences that quietly re-open the boundary. -->

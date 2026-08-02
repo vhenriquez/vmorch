@@ -145,4 +145,10 @@ DEFAULT_USER = _value("default_user", "agent")   # shared across all boxes
 DEFAULT_IMAGE = _value("default_image", "ubuntu-24.04")
 
 # Snapshot layers above the box overlay. Creating a 4th commits the oldest down.
+#: Emit a <vsock> device on every box. It was added so `via: vsock` service
+#: sharing could be turned on later without a stop/start -- but that mechanism
+#: is not built, so today it is a host<->guest transport nothing uses. Set false
+#: to drop it: every device removed is emulated code the guest cannot reach.
+VSOCK_DEVICE = _value("vsock_device", True)
+
 MAX_SNAPSHOT_LAYERS = _value("max_snapshot_layers", 3)
