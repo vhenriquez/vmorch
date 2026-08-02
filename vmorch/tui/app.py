@@ -408,10 +408,21 @@ class App:
         if got is None:
             return
 
-        spec = BoxSpec(name=name, image=image, memory=memory, disk=disk,
-                       internet=net[0], lan=net[1])
-        res = self.task("Creating box", lambda: boxlib.create(spec),
-                        f"Building {name} from {image}. First boot takes a minute.")
+        try:
+            spec = BoxSpec(
+                name=name, image=str(got["image"]), cpus=int(got["cpus"]),
+                memory=str(got["memory"]), disk=str(got["disk"]),
+                sudo=str(got["sudo"]), nested=bool(got["nested"]),
+                internet=bool(got["internet"]), lan=bool(got["lan"]),
+            )
+        except (ValueError, KeyError) as exc:
+            ui.error(self.stdscr, f"bad value: {exc}")
+            return
+
+        res = self.task(
+            "Creating box",
+            lambda: boxlib.create(spec, start=bool(got["start"])),
+            f"Building {name} from {got['image']}. First boot takes a minute.")
         self.refresh_boxes()
         if res is not None:
             self.status = f"Created {name} — ssh {name}"
