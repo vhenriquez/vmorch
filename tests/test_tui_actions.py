@@ -106,6 +106,9 @@ def main() -> int:
     # --- the other actions that build or change things ----------------------
     box = fake_box(sudo="nopasswd")
     for label, method, patches in (
+        ("act_disk", "act_disk", {"resize_disk": lambda n, s: {
+            "name": n, "was": "20G", "now": "30G", "running": True,
+            "filesystem": "/dev/vda1  28G  2G  26G  8% /"}}),
         ("act_sudo", "act_sudo", {"set_sudo": lambda n, m: box,
                                   "reseed": lambda n: box}),
         ("act_nested", "act_nested", {"load": lambda n: box,

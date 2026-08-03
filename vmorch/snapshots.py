@@ -151,8 +151,19 @@ def _prune(box_dir: Path, snaps: list[Snapshot]) -> list[Snapshot]:
     return snaps
 
 
-def rollback(box_dir: Path, disk: Path, index: int) -> Snapshot:
-    """Discard everything above a snapshot and resume from it."""
+def rollback(box_dir: Path, disk: Path, index: int,
+             size: str | None = None) -> Snapshot:
+    """Discard everything above a snapshot and resume from it.
+
+    `size` keeps a rollback from undoing a disk resize. A new overlay inherits
+    its backing file's virtual size, so rolling back to a snapshot taken before
+    `vm disk` would silently shrink the box back to the old size -- and the box
+    would still boot, because the partition table inside that snapshot matches,
+    which is precisely what makes the shrink easy to miss. Passing the spec's
+    size instead creates the overlay at full size; an overlay larger than its
+    backing layer is normal, and the tail is simply unpartitioned until
+    `vm disk <name>` grows the filesystem into it.
+    """
     snaps = load_all(box_dir)
     target = next((s for s in snaps if s.index == index), None)
     if target is None:
@@ -168,7 +179,10 @@ def rollback(box_dir: Path, disk: Path, index: int) -> Snapshot:
     kept = [s for s in snaps if s.index <= index]
     _save_all(box_dir, kept)
 
-    _qemu_img("create", "-f", "qcow2", "-F", "qcow2",
-              "-b", str(target_path), str(disk))
+    args = ["create", "-f", "qcow2", "-F", "qcow2",
+            "-b", str(target_path), str(disk)]
+    if size:
+        args.append(size)
+    _qemu_img(*args)
     disk.chmod(DISK_MODE)
     return target

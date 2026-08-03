@@ -286,6 +286,23 @@ def cmd_snapshot(args) -> None:
     print("        wrote into an rw share is already on the host and stays.")
 
 
+def cmd_disk(args) -> None:
+    res = boxes.resize_disk(args.name, args.size)
+    if res["was"] == res["now"]:
+        print(f"{res['name']} disk is already {res['now']}")
+    else:
+        print(f"{res['name']} disk {res['was']} -> {res['now']}")
+    if res["filesystem"]:
+        print(f"  filesystem: {res['filesystem']}")
+    elif res["running"]:
+        print("  box is running but not reachable over ssh; start it and "
+              f"re-run `vm disk {res['name']} {res['now']}` to grow the filesystem")
+    else:
+        print("  box is stopped, so only the virtual disk grew. Start it and "
+              f"run `vm disk {res['name']} {res['now']}` to grow the filesystem "
+              "into the new space.")
+
+
 def cmd_snapshots(args) -> None:
     snaps = boxes.list_snapshots(args.name)
     if not snaps:
@@ -552,6 +569,12 @@ def build_parser() -> argparse.ArgumentParser:
     sn.add_argument("name")
     sn.add_argument("label", nargs="?")
     sn.set_defaults(func=cmd_snapshot)
+
+    dk = sub.add_parser("disk", help="grow a box's disk (never shrinks)")
+    dk.add_argument("name")
+    dk.add_argument("size",
+                    help="new size, e.g. 60G, or +20G to add to the current size")
+    dk.set_defaults(func=cmd_disk)
 
     sl = sub.add_parser("snapshots", help="list snapshots")
     sl.add_argument("name")

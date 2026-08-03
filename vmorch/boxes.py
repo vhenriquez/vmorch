@@ -487,6 +487,98 @@ def sync_mounts(name: str) -> list[str]:
     return [f.tag for f in box.spec.folders]
 
 
+def _virtual_size(disk: Path) -> int:
+    # -U because a running box holds a write lock on its own disk, and without
+    # it qemu-img refuses to report anything at all -- which would make `vm disk`
+    # work only on stopped boxes. Read-only inspection, so sharing is safe.
+    info = json.loads(subprocess.run(
+        ["qemu-img", "info", "-U", "--output=json", str(disk)],
+        capture_output=True, text=True, check=True,
+    ).stdout)
+    return int(info["virtual-size"])
+
+
+def _format_size(size_bytes: int) -> str:
+    """Render bytes back as a spec-friendly string, preferring whole GB."""
+    if size_bytes % 1024 ** 3 == 0:
+        return f"{size_bytes // 1024 ** 3}G"
+    return f"{size_bytes / 1024 ** 3:.1f}G"
+
+
+def resize_disk(name: str, size: str) -> dict:
+    """Grow a box's disk. Accepts an absolute size ("60G") or an increment ("+20G").
+
+    Three things have to change together, and stopping halfway is what makes a
+    resize look broken:
+
+    1. the qcow2 active layer, so the virtual device is bigger;
+    2. the guest's partition table and filesystem, or `df` is unchanged;
+    3. the spec, or the next `vm apply` reverts the box to its old size.
+
+    **Growing only.** qcow2 can be shrunk, but only by discarding the tail of
+    the device -- which is where the filesystem's data lives. There is no safe
+    automatic shrink, so it is refused rather than offered with a warning.
+
+    A running box is resized live through `virsh blockresize`, which tells qemu
+    to re-read the size, and the filesystem is grown online. Writing to the
+    qcow2 underneath a running qemu instead would corrupt it, so the two paths
+    are genuinely different rather than merely convenient.
+
+    Only the active layer is touched. Snapshots below stay at their original
+    size, which is fine: a qcow2 overlay may be larger than the layer it backs
+    onto, and that is exactly what makes rolling back after a resize work.
+    """
+    box = load(name)
+    disk = disk_path(name)
+    current = _virtual_size(disk)
+
+    text = size.strip()
+    try:
+        target = current + _bytes_of(text[1:]) if text.startswith("+") \
+            else _bytes_of(text)
+    except (ValueError, IndexError) as exc:
+        raise BoxError(
+            f"cannot read size {size!r}: use e.g. 60G, or +20G to add to the "
+            "current size"
+        ) from exc
+
+    if target < current:
+        raise BoxError(
+            f"refusing to shrink {name} from {_format_size(current)} to "
+            f"{_format_size(target)}. Shrinking a qcow2 discards the end of the "
+            "device, where the filesystem keeps its data. Create a new box with "
+            "a smaller --disk and copy what you need across."
+        )
+
+    domain = config.DOMAIN_PREFIX + name
+    running = virsh.domain_state(domain) == "running"
+
+    if target > current:
+        if running:
+            # Live: qemu owns the file. Writing to it directly would corrupt it.
+            virsh.run("blockresize", domain, "vda", f"{target}B")
+        else:
+            subprocess.run(["qemu-img", "resize", str(disk), str(target)],
+                           check=True, capture_output=True)
+        box.spec.disk = _format_size(target)
+        save_spec(box.spec)
+
+    grown = ""
+    if running and guest.reachable(name):
+        # growpart and resize2fs are chatty; the script ends with `df -h /`, and
+        # that last line is the only part anyone wants to read.
+        out = [ln for ln in guest.grow_root(name).splitlines() if ln.strip()]
+        grown = out[-1].strip() if out else ""
+
+    return {
+        "name": name,
+        "was": _format_size(current),
+        "now": _format_size(target),
+        "running": running,
+        "filesystem": grown,
+    }
+
+
 def snapshot(name: str, label: str | None = None):
     """Freeze the box's current disk state. Requires the box to be stopped."""
     box = load(name)
@@ -502,7 +594,9 @@ def rollback(name: str, index: int):
     box = load(name)
     if box.state == "running":
         raise BoxError(f"stop {name} first: `vm stop {name}`")
-    return snapshots.rollback(box_dir(name), disk_path(name), index)
+    # Pass the spec size so rewinding past a `vm disk` does not quietly undo it.
+    return snapshots.rollback(box_dir(name), disk_path(name), index,
+                              size=box.spec.disk)
 
 
 def list_snapshots(name: str):

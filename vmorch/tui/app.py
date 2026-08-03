@@ -578,6 +578,34 @@ class App:
             self.status = f"Rolled back to {res.index} ({res.label})"
         self.refresh_boxes()
 
+    def act_disk(self) -> None:
+        box = self.current
+        if not box:
+            return
+        size = ui.prompt(
+            self.stdscr, f"Grow disk: {box.name}",
+            f"New size (now {box.spec.disk}):", f"+10G")
+        if size is None or not size.strip():
+            return
+
+        note = ("Growing the virtual disk, then the partition and filesystem "
+                "inside it.")
+        if box.state != "running":
+            note = ("Box is stopped, so only the virtual disk grows. Start it "
+                    "and repeat to expand the filesystem.")
+        res = self.task("Growing disk",
+                        lambda: boxlib.resize_disk(box.name, size.strip()), note)
+        if res is None:
+            return
+        if res["was"] == res["now"]:
+            self.status = f"{box.name} disk is already {res['now']}"
+        elif res["filesystem"]:
+            self.status = f"{box.name} disk {res['was']} → {res['now']}"
+        else:
+            self.status = (f"{box.name} disk {res['was']} → {res['now']} — start "
+                           "it and repeat to grow the filesystem")
+        self.refresh_boxes()
+
     def act_nested(self) -> None:
         box = self.current
         if not box:
@@ -738,6 +766,7 @@ class App:
             ("Share a folder                F5", "share"),
             ("Grant a host service          F6", "service"),
             ("Take a snapshot               F2", "snap"),
+            ("Grow the disk", "disk"),
             ("View console log              F3", "view"),
             ("Edit box spec                 F4", "edit"),
             ("Image catalogue", "images"),
@@ -761,6 +790,7 @@ class App:
             "edit": self.act_edit, "del": self.act_delete, "help": self.act_help,
             "reseed": self.act_reseed, "sudo": self.act_sudo,
             "password": self.act_password, "nested": self.act_nested,
+            "disk": self.act_disk,
         }
         if choice in actions:
             actions[choice]()

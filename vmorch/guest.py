@@ -62,6 +62,64 @@ def reachable(name: str) -> bool:
     ).returncode == 0
 
 
+def grow_root(name: str) -> str:
+    """Expand the root partition and filesystem to fill the virtual disk.
+
+    Growing the qcow2 only makes the *device* bigger. The guest still has a
+    partition table and a filesystem describing the old size, so without this
+    step `df` is unchanged and the extra space is invisible -- the single most
+    confusing way for a resize to appear to have done nothing.
+
+    Everything here is idempotent: run it on a box that is already at full size
+    and it reports the same figures back.
+
+    `growpart` ships in the cloud images, but the fallback is `sfdisk` rather
+    than an install, because the boxes most likely to fill up are isolated ones
+    that cannot reach a package mirror.
+
+    The root partition has to be the last one on the disk for this to work,
+    which is how every cloud image lays it out (Ubuntu puts the small ESP and
+    boot partitions first, numbered 14-16, with root at partition 1).
+    """
+    return run(name, r"""set -e
+src=$(findmnt -no SOURCE /)
+fstype=$(findmnt -no FSTYPE /)
+parent=$(lsblk -ndo PKNAME "$src")
+[ -n "$parent" ] || { echo "cannot resolve the disk behind $src" >&2; exit 1; }
+disk=/dev/$parent
+num=${src#/dev/$parent}
+num=${num#p}
+
+rc=0
+if command -v growpart >/dev/null 2>&1; then
+    out=$(growpart "$disk" "$num" 2>&1) || rc=$?
+else
+    out=$(echo ', +' | sfdisk -N "$num" --no-reread --force "$disk" 2>&1) || rc=$?
+    partx -u "$disk" >/dev/null 2>&1 || true
+fi
+echo "$out"
+# growpart's man page says it exits 2 when there is nothing to grow. It does
+# not -- it prints NOCHANGE and exits 1, the same status as a real failure. So
+# the output is the signal, not the exit code, or every already-full-size box
+# would report a spurious error.
+if [ "$rc" -ne 0 ]; then
+    case "$out" in
+        *NOCHANGE*|*"no space"*) : ;;
+        *) echo "growing the partition failed ($rc)" >&2; exit 1 ;;
+    esac
+fi
+
+case "$fstype" in
+    ext2|ext3|ext4) resize2fs "$src" ;;
+    xfs)            xfs_growfs / ;;
+    btrfs)          btrfs filesystem resize max / ;;
+    *) echo "unrecognised root filesystem '$fstype': the partition was grown "\
+            "but the filesystem was not" >&2 ;;
+esac
+df -h / | tail -1
+""")
+
+
 def mount_folder(name: str, folder: Folder) -> None:
     """Mount a shared folder now, and persist it across reboots.
 
