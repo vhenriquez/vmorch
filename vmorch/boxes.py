@@ -277,13 +277,43 @@ def create(box_spec: BoxSpec, start: bool = True) -> Box:
     return load(box_spec.name)
 
 
+def _disk_shortfall(name: str, box_spec: BoxSpec) -> int:
+    """How many bytes the spec asks for beyond the real disk. 0 if in step.
+
+    Raises rather than returning a negative number: a spec asking for *less*
+    than the disk already is cannot be satisfied, and quietly ignoring it is
+    what this function exists to stop.
+    """
+    disk = disk_path(name)
+    if not disk.exists():
+        return 0
+    actual = _virtual_size(disk)
+    wanted = _bytes_of(box_spec.disk)
+    if wanted < actual:
+        raise BoxError(
+            f"{name}: box.toml asks for disk = {box_spec.disk} but the disk is "
+            f"already {_format_size(actual)}. Shrinking discards the end of the "
+            "device, where the filesystem keeps its data, so it is refused. Set "
+            f'disk = "{_format_size(actual)}" (or larger) and apply again.'
+        )
+    return wanted - actual
+
+
 def apply(name: str) -> Box:
     """Regenerate the domain from the spec and reconcile.
 
     Deliberately does not touch cloud-init: that ran once, at first boot. Later
     changes go through domain XML and in-guest commands.
+
+    The disk *is* reconciled, because the spec is the source of truth and
+    `disk = "60G"` in box.toml has to mean something. It previously did not:
+    editing the size and applying reported success and changed nothing, leaving
+    the spec quietly describing a box that did not exist.
     """
     box = load(name)
+    # Checked before the restart below, so a spec that cannot be satisfied
+    # fails immediately instead of after bouncing a running box.
+    shortfall = _disk_shortfall(name, box.spec)
     allocation = alloc.allocate(name)
     services.ensure_box_filter(box.spec)
 
@@ -310,6 +340,11 @@ def apply(name: str) -> Box:
         _ensure_console_log(name)
         _ensure_disk_perms(name)
         virsh.run("start", box.spec.domain)
+
+    # After the restart, so a box that was running grows its filesystem online
+    # in the same step rather than needing a second command.
+    if shortfall > 0:
+        resize_disk(name, box.spec.disk)
 
     return load(name)
 

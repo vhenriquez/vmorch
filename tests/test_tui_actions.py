@@ -143,7 +143,7 @@ def main() -> int:
     a.rebuild_rows = tui_app.App.rebuild_rows.__get__(a)
     a.rebuild_rows()
     text = " ".join(r.text for r in a.rows)
-    for option in ("image", "resources", "network", "sudo", "nested"):
+    for option in ("image", "resources", "disk", "network", "sudo", "nested"):
         failures += check(f"detail panel shows '{option}'", option in text)
 
     print("FAILED" if failures else "TUI actions execute correctly")

@@ -40,7 +40,7 @@ OPTION_HELP = {
     "image":    "Base image the box is built from. Golden images carry software already installed.",
     "cpus":     "Virtual CPUs given to the box.",
     "memory":   "RAM given to the box.",
-    "disk":     "Maximum disk size. A ceiling, not an allocation -- a box uses only what it writes.",
+    "disk":     "Maximum disk size. A ceiling, not an allocation -- a box uses only what it writes. Can be grown later (F9 -> Grow the disk), never shrunk, so err generous.",
     "internet": "Reach the PUBLIC internet. Does not include your local network.",
     "lan":      "Also reach the local network: router, NAS, other machines. Off by default.",
     "sudo":     "What the agent inside may escalate to. The boundary is the VM, so this is defence in depth.",
@@ -128,7 +128,11 @@ class App:
 
         add(Row("header", "Configuration"))
         add(Row("info", f"image      {s.image}"))
-        add(Row("info", f"resources  {s.cpus} cpu · {s.memory} ram · {s.disk} disk"))
+        add(Row("info", f"resources  {s.cpus} cpu · {s.memory} ram"))
+        # Disk gets its own line with the way to change it, because the natural
+        # place to look for that is this panel, not the F9 menu.
+        add(Row("info", f"disk       {s.disk}  ·  grow: F9 → Grow the disk "
+                        "(cannot shrink)"))
         add(Row("info", f"address    {box.ip}   vsock cid {box.cid}"))
         net = ("internet + LAN" if s.lan else "internet only") if s.internet \
             else "isolated (no network out)"
