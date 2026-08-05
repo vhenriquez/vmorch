@@ -33,12 +33,10 @@ ALIASES = {
 
 #: CLI commands the TUI is not expected to expose, with the reason.
 CLI_ONLY = {
-    "golden": "long-running build, better watched in a terminal",
     "ls": "the left panel is the listing",
     "show": "the right panel is the detail view",
     "images": "reachable as the 'Image catalogue' entry",
     "snapshots": "listed in the right panel",
-    "rollback": "Enter on a snapshot row",
     "unshare": "F8 on a folder row",
     "revoke": "F8 on a service row",
     "logs": "F3",
@@ -46,13 +44,19 @@ CLI_ONLY = {
 
 
 def menu_values() -> list[str]:
-    block = re.search(r'ui\.choose\(self\.stdscr, "Menu", \[(.*?)\]\)', SRC, re.S)
-    assert block, "could not find the menu definition"
-    return re.findall(r'"([a-z]+)"\)', block.group(1))
+    """Every leaf action in the menu tree, submenu links excluded.
+
+    Read from the MENUS structure rather than scraped out of the source. The
+    old version regex-matched one `ui.choose(...)` call, so grouping the menu
+    into submenus would have made it silently match nothing and pass.
+    """
+    from vmorch.tui.app import MENUS
+    return [e.value for _, entries in MENUS.values() for e in entries
+            if e.value and not e.value.startswith("menu:")]
 
 
 def handled_values() -> set[str]:
-    body = SRC[SRC.index("def act_menu"):]
+    body = SRC[SRC.index("def _run_menu_action"):]
     return (set(re.findall(r'"([a-z]+)": self\.act_\w+', body))
             | set(re.findall(r'elif choice == "([a-z]+)"', body)))
 
@@ -120,6 +124,42 @@ def main() -> int:
         failures += 1
     else:
         print("  ok   every alias resolves to a real menu entry")
+
+    # --- the menu tree itself -------------------------------------------
+    from vmorch.tui.app import MENUS
+
+    # A submenu link pointing at a name that does not exist is a dead entry
+    # that raises KeyError the moment it is picked.
+    targets = {e.value.split(":", 1)[1]
+               for _, entries in MENUS.values() for e in entries
+               if e.value.startswith("menu:")}
+    failures += report("every submenu link resolves", targets - set(MENUS))
+
+    # A submenu nobody links to cannot be opened, so its actions are lost.
+    failures += report("every submenu is reachable from a menu",
+                       set(MENUS) - targets - {"main"})
+
+    # Accelerators are the whole point of the grouping -- two entries sharing
+    # a letter means one of them can never be reached by keystroke.
+    for name, (_, entries) in MENUS.items():
+        keys = [e.key for e in entries if e.key]
+        dupes = {k for k in keys if keys.count(k) > 1}
+        failures += report(f"'{name}' has no duplicate accelerators", dupes)
+
+        # j and k move the cursor in `choose`, so an accelerator using them
+        # would be swallowed by navigation and look like a dead key.
+        failures += report(f"'{name}' avoids the navigation keys",
+                           {k for k in keys if k in ("j", "k")})
+
+        # Every action needs a letter, or the grouping costs keystrokes
+        # instead of saving them.
+        failures += report(f"'{name}' gives every entry an accelerator",
+                           {e.label for e in entries
+                            if e.value and not e.key})
+
+        # Headers are labels only; an entry is one or the other.
+        failures += report(f"'{name}' keeps headers valueless",
+                           {e.label for e in entries if e.header and e.value})
 
     # Options, not just commands. --nested shipped CLI-only because nothing
     # checked this, which is the whole reason the check exists.

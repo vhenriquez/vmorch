@@ -58,6 +58,104 @@ KEYBAR = [
 ]
 
 
+# --------------------------------------------------------------------------
+# The menu
+#
+# Declared as data, not built inline, so it can be read at a glance and checked
+# by a test rather than by a regular expression over this file.
+#
+# It grew to twenty-four flat entries covering four unrelated scopes -- one box,
+# all boxes, the image catalogue, the host -- in a single undifferentiated list.
+# Long menus are not the problem; unsorted ones are. So:
+#
+#   * the top level holds the handful of actions people reach for constantly,
+#     then one entry per group for everything else;
+#   * groups are named for the *thing being changed*, because that is how
+#     someone looks for an action they have not used before;
+#   * every leaf carries a letter, so any action is F9 plus one keystroke and
+#     the menu never has to be read twice;
+#   * entries that act on a box are marked, and go dim with a reason when no
+#     box is selected instead of being picked and silently doing nothing.
+# --------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Entry:
+    label: str
+    value: str = ""
+    key: str = ""
+    hint: str = ""
+    header: bool = False
+    #: Needs a selected box. The four global groups do not.
+    box: bool = True
+
+    @staticmethod
+    def sep(label: str) -> "Entry":
+        return Entry(label=label, header=True)
+
+
+#: value -> (title, entries). "main" is what F9 opens; the rest are submenus,
+#: reached by a `menu:<name>` value.
+MENUS: dict[str, tuple[str, list[Entry]]] = {
+    "main": ("Menu", [
+        Entry.sep("This box"),
+        Entry("Connect over ssh", "ssh", "c", "Enter"),
+        Entry("Start / stop", "toggle", "s", "Space"),
+        Entry("Edit box spec", "edit", "e", "F4"),
+        Entry("Apply spec (reconcile)", "apply", "a"),
+        Entry.sep("More for this box"),
+        Entry("Disk and snapshots...", "menu:storage", "d"),
+        Entry("Folders and services...", "menu:sharing", "f"),
+        Entry("Privileges and hardware...", "menu:privilege", "p"),
+        Entry("Troubleshoot...", "menu:trouble", "t"),
+        Entry("Destroy box", "del", "x", "F8"),
+        Entry.sep("Everything else"),
+        Entry("New box", "new", "n", "F7", box=False),
+        Entry("Images...", "menu:images", "i", box=False),
+        Entry("Host and settings...", "menu:system", "h", box=False),
+        Entry("Help", "help", "?", "F1", box=False),
+        Entry("Quit", "quit", "q", "F10", box=False),
+    ]),
+    "storage": ("Disk and snapshots", [
+        Entry.sep("Disk"),
+        Entry("Grow the disk (never shrinks)", "disk", "g"),
+        Entry.sep("Snapshots — box must be stopped"),
+        Entry("Take a snapshot", "snap", "t", "F2"),
+        Entry("Roll back to a snapshot", "rollback", "r"),
+    ]),
+    "sharing": ("Folders and services", [
+        Entry.sep("Host folders"),
+        Entry("Share a folder", "share", "s", "F5"),
+        Entry("Re-mount shared folders", "mount", "m"),
+        Entry.sep("Host services"),
+        Entry("Grant a host service", "service", "g", "F6"),
+        Entry.sep("To revoke either, select it on the right and press F8"),
+    ]),
+    "privilege": ("Privileges and hardware", [
+        Entry.sep("What the agent inside may do"),
+        Entry("Set the agent's sudo rights", "sudo", "s"),
+        Entry("Show the sudo password", "password", "p"),
+        Entry.sep("Hardware exposed to the box"),
+        Entry("Toggle nested virtualisation", "nested", "n"),
+        Entry.sep("Network access is in the spec — Edit box spec (F4)"),
+    ]),
+    "trouble": ("Troubleshoot", [
+        Entry("View console log", "view", "v", "F3"),
+        Entry("Reseed: repair a box that refuses ssh", "reseed", "r"),
+        Entry("Audit: what this box looked up and reached", "auditbox", "a"),
+    ]),
+    "images": ("Images", [
+        Entry("Image catalogue", "images", "c", box=False),
+        Entry("Remove an image and its files", "rmimage", "r", box=False),
+        Entry("Build a golden image", "golden", "g", box=False),
+    ]),
+    "system": ("Host and settings", [
+        Entry("Configuration and disk usage", "config", "c", box=False),
+        Entry("Audit: all boxes, last 24h", "audit", "a", box=False),
+        Entry("Ensure management network", "net", "n", box=False),
+    ]),
+}
+
+
 @dataclass
 class Row:
     """A line in the right panel. `kind` decides what F8 and Enter do."""
@@ -556,9 +654,26 @@ class App:
 
     def act_rollback(self) -> None:
         box = self.current
-        row = self.rows[self.rsel] if self.rsel < len(self.rows) else None
-        if not box or row is None or row.kind != "snapshot":
+        if not box:
             return
+        row = self.rows[self.rsel] if self.rsel < len(self.rows) else None
+        if row is None or row.kind != "snapshot":
+            # Reached from the menu rather than by putting the cursor on a
+            # snapshot row, so ask which one. Returning silently here is how
+            # this entry would look like a dead keypress.
+            snaps = boxlib.list_snapshots(box.name)
+            if not snaps:
+                ui.message(self.stdscr, "Roll back",
+                           f"{box.name} has no snapshots yet.\n\n"
+                           "Take one with F2 while the box is stopped.")
+                return
+            index = ui.choose(
+                self.stdscr, f"Roll back {box.name} to...",
+                [ui.Choice(label=f"{s.index}  {s.label}", value=s.index,
+                           hint=s.created[:16]) for s in snaps])
+            if index is None:
+                return
+            row = Row("snapshot", "", index)
         if box.state == "running":
             ui.error(self.stdscr, f"Stop {box.name} first.")
             return
@@ -830,34 +945,46 @@ class App:
             self.status = f"Applied spec for {box.name}"
         self.refresh_boxes()
 
-    def act_menu(self) -> None:
+    def _menu_choices(self, name: str) -> list[ui.Choice]:
+        """One menu's entries, with box-scoped ones disabled if there is none."""
         box = self.current
-        choice = ui.choose(self.stdscr, "Menu", [
-            ("New box                       F7", "new"),
-            ("Start / stop selected      Space", "toggle"),
-            ("Connect over ssh           Enter", "ssh"),
-            ("Apply spec (reconcile)", "apply"),
-            ("Share a folder                F5", "share"),
-            ("Grant a host service          F6", "service"),
-            ("Take a snapshot               F2", "snap"),
-            ("Grow the disk", "disk"),
-            ("View console log              F3", "view"),
-            ("Edit box spec                 F4", "edit"),
-            ("Image catalogue", "images"),
-            ("Remove an image (files + catalogue entry)...", "rmimage"),
-            ("Configuration and disk usage", "config"),
-            ("Audit log: lookups and connections", "audit"),
-            ("Re-mount shared folders", "mount"),
-            ("Reseed: repair a box that refuses ssh", "reseed"),
-            ("Set the agent's sudo rights", "sudo"),
-            ("Toggle nested virtualisation", "nested"),
-            ("Show the sudo password", "password"),
-            ("Build a golden image...", "golden"),
-            ("Ensure management network", "net"),
-            ("Destroy box                   F8", "del"),
-            ("Help                          F1", "help"),
-            ("Quit                         F10", "quit"),
-        ])
+        out = []
+        for e in MENUS[name][1]:
+            out.append(ui.Choice(
+                label=e.label, value=e.value, key=e.key, hint=e.hint,
+                header=e.header,
+                disabled="" if (box or not e.box) else "No box selected",
+            ))
+        return out
+
+    def act_menu(self, name: str = "main") -> None:
+        """Open a menu, following submenus until something is chosen.
+
+        A loop rather than recursion so Esc in a submenu comes back to the menu
+        above it instead of closing the whole thing -- backing out of a wrong
+        turn should cost one keystroke, not five.
+        """
+        stack = [name]
+        while stack:
+            current = stack[-1]
+            title, _ = MENUS[current]
+            box = self.current
+            if current != "main" and box and any(
+                    e.box for e in MENUS[current][1] if e.value):
+                title = f"{title} — {box.name}"
+
+            choice = ui.choose(self.stdscr, title, self._menu_choices(current))
+            if choice is None:
+                stack.pop()                    # Esc: back one level
+                continue
+            if isinstance(choice, str) and choice.startswith("menu:"):
+                stack.append(choice.split(":", 1)[1])
+                continue
+            self._run_menu_action(choice)
+            return
+
+    def _run_menu_action(self, choice: str) -> None:
+        box = self.current
         actions = {
             "new": self.act_new, "toggle": self.act_toggle, "ssh": self.act_ssh,
             "share": self.act_share, "service": self.act_service,
@@ -866,6 +993,7 @@ class App:
             "reseed": self.act_reseed, "sudo": self.act_sudo,
             "password": self.act_password, "nested": self.act_nested,
             "disk": self.act_disk, "rmimage": self.act_rmimage,
+            "rollback": self.act_rollback,
         }
         if choice in actions:
             actions[choice]()
@@ -873,6 +1001,16 @@ class App:
             self.task("Applying", lambda: boxlib.apply(box.name))
             self.refresh_boxes()
             self.status = f"Applied {box.name}"
+        elif choice == "auditbox" and box:
+            import io, contextlib
+            from .. import cli as _cli
+            buf = io.StringIO()
+            args = type("A", (), {"since": "-24h", "box": box.name,
+                                  "blocked": False, "install": False,
+                                  "enable_dns": False})()
+            with contextlib.redirect_stdout(buf):
+                _cli.cmd_audit(args)
+            ui.pager(self.stdscr, f"Audit — {box.name}, last 24h", buf.getvalue())
         elif choice == "images":
             lines = []
             for k, e in sorted(images.catalogue().items()):
@@ -888,7 +1026,8 @@ class App:
                              f"{'':<14} {', '.join(marks) or 'nothing on disk'}")
             lines.append("")
             lines.append(f"catalogue: {images.USER_CATALOGUE}")
-            lines.append("F9 → Remove an image  deletes the files and the entry")
+            lines.append("F9 → Images → Remove an image  deletes the files "
+                         "and the catalogue entry")
             ui.pager(self.stdscr, "Image catalogue", "\n".join(lines))
         elif choice == "mount" and box:
             res = self.task("Mounting", lambda: boxlib.sync_mounts(box.name))
@@ -1031,8 +1170,8 @@ DETAILS PANEL (right)
 PRIVILEGE
   The right panel shows each box's sudo mode. "passwordless" is
   highlighted because it means an unprivileged compromise inside the box
-  is one step from root. F9 -> "Set the agent's sudo rights" changes it;
-  it takes effect after a reseed, which the dialog offers to do.
+  is one step from root. F9 -> p -> s changes it; it takes effect after a
+  reseed, which the dialog offers to do.
 
   vmorch keeps its own root access over a separate key, so reducing the
   agent's privileges never breaks shares, services or imaging.
@@ -1040,11 +1179,15 @@ PRIVILEGE
 RECOVERY
   A box that pings but refuses ssh has usually lost its ssh host keys:
   the socket accepts the connection, sshd cannot start, the client sees a
-  refusal. F9 -> "Reseed" re-runs the box's first-boot configuration and
+  refusal. F9 -> t -> r re-runs the box's first-boot configuration and
   regenerates them. Installed software and data are untouched.
 
-  F9 -> "Re-mount shared folders" fixes a share that was configured while
-  the box was stopped and never got mounted.
+  F9 -> f -> m re-mounts shared folders, which fixes a share that was
+  configured while the box was stopped and never got mounted.
+
+  Granting internet to an existing box needs "Apply spec" AND a reseed:
+  apply adds the NIC, but the guest's network config was written at first
+  boot and does not know about it.
 
 ACTIONS
   F2               take a snapshot (the box must be stopped)
@@ -1052,8 +1195,26 @@ ACTIONS
   F4               edit the box spec in $EDITOR, then apply
   F5               share a host folder
   F6               grant access to a host service
-  F9               menu — everything, including the image catalogue
+  F9               menu — everything else
   F10 / q          quit
+
+THE MENU (F9)
+  Grouped by what each action changes, so you can find something you
+  have not used before without reading the whole list. Every entry has
+  a letter: F9 then that letter runs it, no scrolling.
+
+    This box            ssh, start/stop, edit the spec, apply it
+    Disk and snapshots  d   grow the disk, snapshot, roll back
+    Folders and services f  share a folder, re-mount, grant a service
+    Privileges/hardware p   sudo rights, sudo password, nested virt
+    Troubleshoot        t   console log, reseed, this box's audit trail
+    Images              i   catalogue, remove an image, golden images
+    Host and settings   h   config and disk usage, full audit, network
+
+  Esc backs out one level rather than closing the menu.
+
+  Entries that act on a box go dim when no box is selected, instead of
+  being pickable and doing nothing.
 
 THINGS WORTH KNOWING
 

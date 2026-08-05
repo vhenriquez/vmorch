@@ -192,6 +192,46 @@ def main() -> int:
         images_mod.catalogue = real_catalogue
     tui_ui.confirm = lambda *a, **k: True
 
+    # --- act_menu must actually follow a submenu through to an action -------
+    #
+    # The menu is data now, and the menu test checks that data. This checks the
+    # code that walks it: that "menu:storage" descends instead of being handed
+    # to the dispatcher as an action name, that Esc in a submenu returns to the
+    # menu above rather than closing everything, and that the leaf runs.
+    box = fake_box()
+    a = make_app(box)
+    a.task = lambda title, fn, note="": fn()
+    ran = []
+    a.act_disk = lambda: ran.append("disk")
+
+    picks = iter(["menu:storage", "disk"])
+    tui_ui.choose = lambda *a, **k: next(picks, None)
+    a.act_menu()
+    failures += check("act_menu descends into a submenu and runs the action",
+                      ran == ["disk"], str(ran))
+
+    # Esc (None) in the submenu, then Esc again at the top: nothing runs, and
+    # it must terminate rather than reopening the submenu forever.
+    ran.clear()
+    picks = iter(["menu:storage", None, None])
+    tui_ui.choose = lambda *a, **k: next(picks, None)
+    a.act_menu()
+    failures += check("Esc backs out of a submenu without acting", ran == [])
+
+    # Every submenu must be openable: a bad link would raise KeyError here.
+    for name in tui_app.MENUS:
+        if name == "main":
+            continue
+        ran.clear()
+        picks = iter([f"menu:{name}", None, None])
+        tui_ui.choose = lambda *a, **k: next(picks, None)
+        try:
+            a.act_menu()
+            failures += check(f"submenu '{name}' opens", True)
+        except Exception as exc:                       # noqa: BLE001
+            failures += check(f"submenu '{name}' opens", False,
+                              f"{type(exc).__name__}: {exc}")
+
     # --- the detail panel must render every box option ----------------------
     a = make_app(fake_box(sudo="nopasswd", nested=True))
     a.rebuild_rows = tui_app.App.rebuild_rows.__get__(a)

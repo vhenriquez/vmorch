@@ -14,6 +14,7 @@ import curses
 import queue
 import threading
 import time
+from dataclasses import dataclass
 
 # Colour pair ids
 FIELD = 1        # the desktop behind the panels
@@ -299,35 +300,125 @@ def prompt(stdscr, title: str, label: str, default: str = "") -> str | None:
         curses.curs_set(0)
 
 
-def choose(stdscr, title: str, options: list[tuple[str, object]],
-           note: str = "") -> object | None:
-    """Pick one of a list. Returns the chosen value, or None if cancelled."""
-    labels = [o[0] for o in options]
+@dataclass
+class Choice:
+    """One line in a `choose` list.
+
+    Richer than a (label, value) pair because a menu of two dozen actions is
+    unreadable as a flat list: it needs section headers to group by what the
+    thing acts on, a key hint so the menu teaches the shortcut rather than
+    replacing it, and a way to show an action that exists but is not available
+    right now instead of silently doing nothing when picked.
+    """
+    label: str
+    value: object = None
+    key: str = ""            # accelerator; pressing it selects this line
+    hint: str = ""           # right-aligned reminder, e.g. "F4" or "Enter"
+    header: bool = False     # a section title: shown, never selectable
+    disabled: str = ""       # why it cannot be picked; shown dim when set
+
+    @property
+    def selectable(self) -> bool:
+        return not self.header and not self.disabled
+
+
+def _as_choices(options) -> list[Choice]:
+    """Accept plain (label, value) pairs as well as Choice objects."""
+    out = []
+    for o in options:
+        out.append(o if isinstance(o, Choice) else Choice(label=o[0], value=o[1]))
+    return out
+
+
+def choose(stdscr, title: str, options, note: str = "") -> object | None:
+    """Pick one of a list. Returns the chosen value, or None if cancelled.
+
+    Scrolls when the list is taller than the screen. It used to draw every row
+    unconditionally, which silently wrote past the frame on a short terminal --
+    fine while every list was six items, not once the menu was grouped.
+    """
+    items = _as_choices(options)
+    if not any(i.selectable for i in items):
+        return None
+
     body = _wrap(note, 54) if note else []
-    w = max([len(l) for l in labels + body + [title]]) + 8
-    h = len(labels) + len(body) + 4
+    label_w = max(len(i.label) + (2 if not i.header else 0) for i in items)
+    hint_w = max((len(i.hint) for i in items), default=0)
+    w = max(label_w + hint_w + 8, max(len(l) for l in body + [title]) + 8)
+
+    sh = stdscr.getmaxyx()[0]
+    view = max(3, min(len(items), sh - 6 - len(body)))
+    h = view + len(body) + 4
     y, x, h, w = _centred_box(stdscr, h, w, title)
+    view = h - len(body) - 4
 
     for i, line in enumerate(body):
         put(stdscr, y + 1 + i, x + 2, line, attr(WARN, bold=True))
     top = y + 1 + len(body)
 
-    idx = 0
+    idx = next(i for i, it in enumerate(items) if it.selectable)
+    first = 0
+
+    def step(start: int, delta: int) -> int:
+        """Next selectable line, skipping headers and unavailable actions."""
+        j = start
+        for _ in range(len(items)):
+            j = (j + delta) % len(items)
+            if items[j].selectable:
+                return j
+        return start
+
     while True:
-        for i, label in enumerate(labels):
-            a = attr(SELECT, bold=True) if i == idx else attr(DIALOG)
-            put(stdscr, top + i, x + 2, f" {label.ljust(w - 6)}", a)
-        put(stdscr, y + h - 2, x + 2, "Enter select   Esc cancel", attr(DIM))
+        first = min(first, idx)
+        first = max(first, idx - view + 1)
+        first = max(0, min(first, len(items) - view))
+
+        for row in range(view):
+            i = first + row
+            it = items[i]
+            inner = w - 4
+            if it.header:
+                text = f" {it.label} ".ljust(inner, "─")
+                put(stdscr, top + row, x + 2, text, attr(DIM))
+                continue
+            line = f"  {it.label}".ljust(inner - hint_w - 1)[: inner - hint_w - 1]
+            line += it.hint.rjust(hint_w) + " "
+            if it.disabled:
+                a = attr(DIM)
+            elif i == idx:
+                a = attr(SELECT, bold=True)
+            else:
+                a = attr(DIALOG)
+            put(stdscr, top + row, x + 2, line, a)
+
+        more = " ↑↓ more " if len(items) > view else ""
+        footer = "Enter select   Esc cancel"
+        reason = items[idx].disabled if items[idx].disabled else ""
+        put(stdscr, y + h - 2, x + 2,
+            (reason or footer + more).ljust(w - 4)[: w - 4],
+            attr(WARN, bold=True) if reason else attr(DIM))
         stdscr.refresh()
+
         k = stdscr.getch()
         if k == 27:
             return None
         if k in (10, 13):
-            return options[idx][1]
+            return items[idx].value
         if k in (curses.KEY_UP, ord("k")):
-            idx = (idx - 1) % len(labels)
+            idx = step(idx, -1)
         elif k in (curses.KEY_DOWN, ord("j")):
-            idx = (idx + 1) % len(labels)
+            idx = step(idx, 1)
+        elif k in (curses.KEY_HOME,):
+            idx = step(len(items) - 1, 1)
+        elif k in (curses.KEY_END,):
+            idx = step(0, -1)
+        elif 0 < k < 256:
+            # Accelerators come last so they never shadow navigation. j and k
+            # are navigation here, so an accelerator must not be one of them.
+            ch = chr(k).lower()
+            for i, it in enumerate(items):
+                if it.key and it.key.lower() == ch and it.selectable:
+                    return it.value
 
 
 def form(stdscr, title: str, fields: list[dict], note: str = "",
