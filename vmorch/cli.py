@@ -29,8 +29,10 @@ EXAMPLE_CONFIG = """\
 # boxes_dir      = "~/vmorch/boxes"
 
 # Verified downloads, kept so a rebuild needs no network. Cold and written once,
-# so a slow disk is the right place for it.
-# download_cache = "~/vmorch/cloud_images"
+# so this is the one directory that belongs on a slow disk if you have one.
+# Defaults under state_dir; point it at a spare drive to keep several hundred
+# megabytes per image off your root filesystem.
+# download_cache = "~/vmorch/cache"
 
 # --- defaults for `vm new` ---------------------------------------------------
 # default_image  = "ubuntu-24.04"
@@ -87,6 +89,103 @@ def cmd_images(args) -> None:
           f" ({config.DOWNLOAD_CACHE})"
           f"\n  BASE       = ready to build boxes from ({config.BASES_DIR})"
           "\n  STATUS     = local (you built it) · new? (untested) · BROKEN")
+
+
+def describe_removal(plan) -> list[str]:
+    """The warning shown before an image is removed.
+
+    Built from the plan rather than re-derived, so the prompt cannot describe
+    one set of files while the removal deletes another. Shared with the TUI for
+    the same reason.
+    """
+    lines = [f"{plan.key}  --  {plan.description}", ""]
+    if plan.empty:
+        if plan.keeps_base:
+            return lines + [
+                "Nothing left to remove. The golden image is still the base for "
+                f"{', '.join(plan.used_by)},", "so it stays.",
+            ]
+        return lines + ["Nothing to remove: no files on disk, no catalogue entry."]
+
+    lines.append("This deletes:")
+    for which, path, label in (
+            ("base", plan.base, "golden image (boxes build from this)"),
+            ("cached", plan.cached, "cached download (verified original)"),
+            ("partial", plan.partial, "partial download")):
+        if not path:
+            continue
+        # A base something still boots from is never deleted, with or without
+        # --force. Saying otherwise would make this prompt a lie, and the
+        # "frees N" figure roughly double what actually comes back.
+        kept = which == "base" and plan.keeps_base
+        lines.append(f"  {images.human_size(plan.size_of(which)):>7}  {path}")
+        lines.append(f"           {label}"
+                     + ("   -- KEPT, still in use" if kept else ""))
+    if plan.in_catalogue:
+        lines.append(f"           entry [{plan.key}] in {images.USER_CATALOGUE}")
+    if plan.freed:
+        lines.append("")
+        lines.append(f"Frees {images.human_size(plan.freed)}.")
+
+    if plan.used_by:
+        lines += ["",
+                  f"IN USE by: {', '.join(plan.used_by)}",
+                  "  Those boxes are overlays on this base -- their disks hold",
+                  "  only their own changes. Removing it breaks them."]
+    elif plan.entry.local:
+        lines += ["",
+                  "This is a golden image you built. There is no download to",
+                  "fall back on -- getting it back means `vm golden` again."]
+    elif plan.base and plan.cached:
+        lines += ["",
+                  "Both copies go, so rebuilding this image needs the network."]
+    elif plan.base and plan.entry.url and plan.entry.cached.exists():
+        # Only say this when a download really is being left behind. Saying it
+        # whenever `cached` is unset would promise an offline rebuild for an
+        # image whose cache was cleared long ago.
+        lines += ["",
+                  "The cached download is kept, so the base can be rebuilt",
+                  "offline by creating a box from this image."]
+    elif plan.base:
+        lines += ["",
+                  "There is no cached download, so rebuilding this image needs",
+                  "the network."]
+
+    if plan.shipped and plan.in_catalogue:
+        lines += ["",
+                  "Ships with vmorch: `vm images --restore-defaults` re-adds the",
+                  "entry later (it does not re-download anything)."]
+    return lines
+
+
+def cmd_rmimage(args) -> None:
+    plan = images.plan_removal(args.name, keep_cache=args.keep_cache,
+                               keep_entry=args.keep_entry)
+    print("\n".join(describe_removal(plan)))
+    sys.stdout.flush()      # so the refusal on stderr lands after the warning
+    if plan.empty:
+        return
+
+    if not args.yes:
+        print()
+        try:
+            if input(f"Remove {plan.key}? [y/N] ").strip().lower() \
+                    not in ("y", "yes"):
+                print("cancelled")
+                return
+        except (EOFError, KeyboardInterrupt):
+            print("\ncancelled")
+            return
+
+    done = images.remove(plan, force=args.force)
+    print()
+    for path in done.files:
+        print(f"removed {path}")
+    if done.in_catalogue:
+        print(f"removed entry [{done.key}] from {images.USER_CATALOGUE}")
+    if plan.used_by and args.force:
+        print(f"kept    {images.base_path(plan.entry)}"
+              f"  (still in use by {', '.join(plan.used_by)})")
 
 
 def cmd_new(args) -> None:
@@ -493,6 +592,21 @@ def build_parser() -> argparse.ArgumentParser:
     im.add_argument("--restore-defaults", action="store_true",
                     help="re-add shipped images you have deleted")
     im.set_defaults(func=cmd_images)
+
+    ri = sub.add_parser("rmimage",
+                        help="remove an image: files, cache and catalogue entry")
+    ri.add_argument("name", help="image key, as shown by `vm images`")
+    ri.add_argument("--yes", "-y", action="store_true",
+                    help="skip the confirmation prompt")
+    ri.add_argument("--keep-cache", action="store_true",
+                    help="delete the golden image but keep the verified "
+                         "download, so it can be rebuilt without the network")
+    ri.add_argument("--keep-entry", action="store_true",
+                    help="delete the files but leave the block in images.toml")
+    ri.add_argument("--force", action="store_true",
+                    help="proceed even if boxes use this image; their base file "
+                         "is kept regardless, so they keep working")
+    ri.set_defaults(func=cmd_rmimage)
 
     new = sub.add_parser("new", help="create a box")
     new.add_argument("name")

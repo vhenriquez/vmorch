@@ -374,11 +374,6 @@ class App:
             key=lambda kv: (kv[0] != config.DEFAULT_IMAGE, kv[1].broken,
                             not kv[1].verified, kv[0]),
         )
-        entries = sorted(
-            images.catalogue().items(),
-            key=lambda kv: (kv[0] != config.DEFAULT_IMAGE, kv[1].broken,
-                            not kv[1].verified, kv[0]),
-        )
         fields = [
             {"key": "image", "label": "image", "type": "choice",
              "value": config.DEFAULT_IMAGE,
@@ -610,6 +605,81 @@ class App:
                            "it and repeat to grow the filesystem")
         self.refresh_boxes()
 
+    def act_rmimage(self) -> None:
+        """Delete an image: golden base, cached download and catalogue entry.
+
+        Every option `vm rmimage` takes is here as a form field, because the
+        rule is that nothing is CLI-only -- and the choices genuinely matter.
+        Keeping the cache is the difference between rebuilding this image
+        offline and needing the network again.
+        """
+        entries = sorted(images.catalogue(include_hidden=True).items())
+        if not entries:
+            ui.message(self.stdscr, "Remove image", "The catalogue is empty.")
+            return
+
+        marks = []
+        for key, entry in entries:
+            state = []
+            if images.base_path(entry).exists():
+                state.append("base")
+            if entry.url and entry.cached.exists():
+                state.append("cached")
+            marks.append((f"{key:<16} {', '.join(state) or 'nothing on disk'}",
+                          key))
+        key = ui.choose(self.stdscr, "Remove which image?", marks)
+        if key is None:
+            return
+
+        got = ui.form(self.stdscr, f"Remove image: {key}", [
+            {"key": "keep_cache", "label": "keep download", "type": "bool",
+             "value": False,
+             "help": "Keep the verified original in the download cache. The "
+                     "golden image can then be rebuilt without the network. "
+                     "Turn off to reclaim the cache space too."},
+            {"key": "keep_entry", "label": "keep entry", "type": "bool",
+             "value": False,
+             "help": "Leave the block in images.toml, so the image still "
+                     "appears in the catalogue and can be downloaded again. "
+                     "Turn off to forget it entirely."},
+            {"key": "force", "label": "force", "type": "bool", "value": False,
+             "help": "Remove even while boxes are built on this image. Their "
+                     "base file is kept regardless — only the catalogue entry "
+                     "and cache go — so the boxes keep working.",
+             "risky": True},
+        ], note="Nothing is deleted until you have seen the file list and "
+                "confirmed it.", action="remove")
+        if got is None:
+            return
+
+        try:
+            plan = images.plan_removal(key, keep_cache=bool(got["keep_cache"]),
+                                       keep_entry=bool(got["keep_entry"]))
+        except images.ImageError as exc:
+            ui.error(self.stdscr, str(exc))
+            return
+
+        # The warning text is built by the CLI from the same plan object that
+        # does the deleting, so what is shown here cannot drift from what goes.
+        from .. import cli as _cli
+        ui.pager(self.stdscr, f"Remove image: {key}",
+                 "\n".join(_cli.describe_removal(plan)))
+        if plan.empty:
+            return
+        if not ui.confirm(self.stdscr, "Remove image",
+                          f"Delete {images.human_size(plan.freed)} for {key}? "
+                          "This cannot be undone.", danger=True):
+            self.status = "cancelled"
+            return
+
+        done = self.task("Removing image",
+                         lambda: images.remove(plan, force=bool(got["force"])),
+                         f"Deleting {key}.")
+        if done is None:
+            return
+        self.status = (f"Removed {key} — freed {images.human_size(done.freed)}"
+                       if done.files else f"Removed {key} from the catalogue")
+
     def act_nested(self) -> None:
         box = self.current
         if not box:
@@ -774,6 +844,7 @@ class App:
             ("View console log              F3", "view"),
             ("Edit box spec                 F4", "edit"),
             ("Image catalogue", "images"),
+            ("Remove an image (files + catalogue entry)...", "rmimage"),
             ("Configuration and disk usage", "config"),
             ("Audit log: lookups and connections", "audit"),
             ("Re-mount shared folders", "mount"),
@@ -794,7 +865,7 @@ class App:
             "edit": self.act_edit, "del": self.act_delete, "help": self.act_help,
             "reseed": self.act_reseed, "sudo": self.act_sudo,
             "password": self.act_password, "nested": self.act_nested,
-            "disk": self.act_disk,
+            "disk": self.act_disk, "rmimage": self.act_rmimage,
         }
         if choice in actions:
             actions[choice]()
@@ -806,12 +877,18 @@ class App:
             lines = []
             for k, e in sorted(images.catalogue().items()):
                 marks = []
-                if e.cached.exists():
-                    marks.append("cached")
-                if images.base_path(e).exists():
-                    marks.append("base ready")
+                base = images.base_path(e)
+                if base.exists():
+                    marks.append(
+                        f"base ready {images.human_size(base.stat().st_size)}")
+                if e.url and e.cached.exists():
+                    marks.append(
+                        f"cached {images.human_size(e.cached.stat().st_size)}")
                 lines.append(f"{k:<14} {e.description}\n"
-                             f"{'':<14} {', '.join(marks) or 'not downloaded'}")
+                             f"{'':<14} {', '.join(marks) or 'nothing on disk'}")
+            lines.append("")
+            lines.append(f"catalogue: {images.USER_CATALOGUE}")
+            lines.append("F9 → Remove an image  deletes the files and the entry")
             ui.pager(self.stdscr, "Image catalogue", "\n".join(lines))
         elif choice == "mount" and box:
             res = self.task("Mounting", lambda: boxlib.sync_mounts(box.name))

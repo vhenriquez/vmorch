@@ -60,7 +60,11 @@ class CatalogueEntry:
 
     @property
     def filename(self) -> str:
-        return self.url.rsplit("/", 1)[-1]
+        # Falls back to the key for an entry with no url. Returning "" made
+        # `cached` below evaluate to the cache *directory*, which always exists
+        # -- so `vm images` marked every locally built golden image as
+        # DOWNLOADED, and `vm rmimage` planned to delete the whole cache.
+        return self.url.rsplit("/", 1)[-1] if self.url else self.key
 
     @property
     def cached(self) -> Path:
@@ -314,6 +318,233 @@ def register_local(key: str, description: str) -> None:
     )
 
 
+def human_size(size_bytes: int) -> str:
+    """Bytes as something a confirmation prompt can show."""
+    for unit, scale in (("G", 1024 ** 3), ("M", 1024 ** 2), ("K", 1024)):
+        if size_bytes >= scale:
+            return f"{size_bytes / scale:.1f}{unit}"
+    return f"{size_bytes}B"
+
+
+def _header_key(line: str) -> str | None:
+    """The image key a TOML table header names, or None if not a header."""
+    text = line.strip()
+    if not text.startswith("[") or text.startswith("[[") or not text.endswith("]"):
+        return None
+    return text[1:-1].strip().strip('"').strip("'")
+
+
+def remove_from_catalogue(key: str) -> bool:
+    """Delete an image's block from images.toml. True if there was one.
+
+    Text surgery rather than a parse-and-rewrite, because this file is mostly
+    comments -- the header explaining the format, and whatever the user wrote
+    above their own entries. tomllib drops every one of them, so a round-trip
+    through it would quietly gut the file as the price of deleting four lines.
+
+    A comment sitting directly above the block is left where it is. It may well
+    describe the image that just went away, but the alternative is scanning
+    backwards through comment lines, and the first entry in the file has the
+    entire file header directly above it -- which that rule would eat.
+    """
+    if not USER_CATALOGUE.exists():
+        return False
+
+    lines = USER_CATALOGUE.read_text().splitlines(keepends=True)
+    out, dropping, found = [], False, False
+    for line in lines:
+        header = _header_key(line)
+        if header is not None:
+            dropping = header == key
+            found = found or dropping
+        if not dropping:
+            out.append(line)
+
+    if not found:
+        return False
+
+    text = "".join(out)
+    while "\n\n\n" in text:                       # close the gap left behind
+        text = text.replace("\n\n\n", "\n\n")
+    USER_CATALOGUE.write_text(text.rstrip("\n") + "\n")
+    return True
+
+
+def _backing_chain(disk: Path) -> list[Path]:
+    """Every file a qcow2 reads from, itself included.
+
+    -U for the same reason as everywhere else: a running box holds a write lock
+    on its own disk, and without it qemu-img refuses to answer at all.
+    """
+    try:
+        info = subprocess.run(
+            ["qemu-img", "info", "-U", "--backing-chain", "--output=json",
+             str(disk)],
+            capture_output=True, text=True, check=True,
+        ).stdout
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return []
+    return [Path(layer["filename"]) for layer in json.loads(info)
+            if layer.get("filename")]
+
+
+def boxes_using(key: str) -> list[str]:
+    """Names of boxes that would break if this image's base were deleted.
+
+    Deliberately asks two different questions, because they catch different
+    boxes. The spec says which image a box was *asked* for, which is the only
+    signal for a box whose base has not been built yet. The backing chain says
+    what its disk *actually reads from*, which is the one that decides whether
+    deleting a file breaks a running system -- and it stays right even if the
+    catalogue entry was renamed underneath the box.
+
+    Note that boxes.py cannot be imported here: it imports this module. Reading
+    box.toml directly is the cost of that, and it is a two-line read.
+    """
+    if not config.BOXES_DIR.exists():
+        return []
+
+    base = config.BASES_DIR / f"{key}.qcow2"
+    try:
+        base = base.resolve()
+    except OSError:
+        pass
+
+    using = set()
+    for box_dir in sorted(config.BOXES_DIR.iterdir()):
+        spec_file = box_dir / "box.toml"
+        if not spec_file.is_file():
+            continue
+        try:
+            with open(spec_file, "rb") as fh:
+                if tomllib.load(fh).get("image") == key:
+                    using.add(box_dir.name)
+                    continue
+        except Exception:                             # noqa: BLE001
+            pass                                      # unreadable spec: try the disk
+        for disk in sorted(box_dir.glob("*.qcow2")):
+            if any(layer == base for layer in _backing_chain(disk)):
+                using.add(box_dir.name)
+                break
+    return sorted(using)
+
+
+@dataclass
+class RemovalPlan:
+    """What removing an image would actually delete. Nothing is touched yet."""
+    key: str
+    description: str
+    entry: CatalogueEntry
+    base: Path | None = None          # golden image on NVMe, if present
+    cached: Path | None = None        # verified original download, if present
+    partial: Path | None = None       # leftover .part from an interrupted fetch
+    in_catalogue: bool = False        # has a block in images.toml
+    used_by: tuple[str, ...] = ()     # boxes that would break
+    shipped: bool = False             # built in, so restorable
+    #: Sizes measured when the plan is made, keyed "base"/"cached"/"partial".
+    #: Recorded rather than stat()ed on demand, because the same plan object is
+    #: what reports the outcome -- and by then the files are gone, so a live
+    #: stat() would tell the confirmation prompt the truth and the summary line
+    #: zero.
+    sizes: tuple[tuple[str, int], ...] = ()
+
+    @property
+    def keeps_base(self) -> bool:
+        """A base something still boots from is never deleted, even by --force."""
+        return bool(self.base and self.used_by)
+
+    @property
+    def files(self) -> list[Path]:
+        """Everything that actually goes, in deletion order."""
+        return [p for p in (self.cached, self.partial,
+                            None if self.keeps_base else self.base) if p]
+
+    @property
+    def freed(self) -> int:
+        keys = {"cached", "partial"} | (set() if self.keeps_base else {"base"})
+        return sum(n for k, n in self.sizes if k in keys)
+
+    @property
+    def empty(self) -> bool:
+        return not self.files and not self.in_catalogue
+
+    def size_of(self, which: str) -> int:
+        return next((n for k, n in self.sizes if k == which), 0)
+
+
+def plan_removal(key: str, keep_cache: bool = False,
+                 keep_entry: bool = False) -> RemovalPlan:
+    """Work out what `remove` would do, so a caller can show it first.
+
+    Split from `remove` on purpose: both the CLI and the TUI have to describe
+    the damage before doing it, and a confirmation prompt built from a second,
+    separately written list of files is a prompt that eventually lies.
+    """
+    entry = get(key)
+    base = base_path(entry)
+    cached = entry.cached if entry.url else None
+    partial = cached.with_suffix(cached.suffix + ".part") if cached else None
+
+    plan = RemovalPlan(
+        key=key,
+        description=entry.description,
+        entry=entry,
+        base=base if base.exists() else None,
+        cached=cached if (cached and cached.exists() and not keep_cache) else None,
+        partial=partial if (partial and partial.exists() and not keep_cache) else None,
+        in_catalogue=(not keep_entry) and _has_block(key),
+        used_by=tuple(boxes_using(key)),
+        shipped=key in CATALOGUE,
+    )
+    sizes = []
+    for which, path in (("base", plan.base), ("cached", plan.cached),
+                        ("partial", plan.partial)):
+        if not path:
+            continue
+        try:
+            sizes.append((which, path.stat().st_size))
+        except OSError:
+            sizes.append((which, 0))
+    return replace(plan, sizes=tuple(sizes))
+
+
+def _has_block(key: str) -> bool:
+    if not USER_CATALOGUE.exists():
+        return False
+    return any(_header_key(line) == key
+               for line in USER_CATALOGUE.read_text().splitlines())
+
+
+def remove(plan: RemovalPlan, force: bool = False) -> RemovalPlan:
+    """Carry out a removal plan. Returns it, for reporting what happened.
+
+    Refuses while a box still depends on the image. That box's disk is only an
+    overlay -- the bytes it boots from live in the base -- so deleting the base
+    does not free a box, it destroys one, and it does it silently: the box keeps
+    running on cached clusters until it next reads an untouched block.
+    """
+    if plan.used_by and not force:
+        raise ImageError(
+            f"{plan.key} is the base for {len(plan.used_by)} box(es): "
+            f"{', '.join(plan.used_by)}\n"
+            "  Their disks are overlays on it, so deleting it would break them.\n"
+            f"  Destroy them first (vm rm {plan.used_by[0]}), or pass --force to\n"
+            "  remove the catalogue entry and cache but keep the base file."
+        )
+
+    # plan.files already omits a base that is still in use -- a forced removal
+    # is for tidying the catalogue, not for breaking live boxes -- and it is the
+    # same list the confirmation prompt was built from.
+    for path in plan.files:
+        if path == plan.base:
+            path.chmod(0o644)         # ensure_base marks it 0444
+        path.unlink(missing_ok=True)
+
+    if plan.in_catalogue:
+        remove_from_catalogue(plan.key)
+    return plan
+
+
 def get(key: str) -> CatalogueEntry:
     known = catalogue(include_hidden=True)
     try:
@@ -363,7 +594,7 @@ def download(entry: CatalogueEntry, force: bool = False) -> Path:
     A cached file that already verifies is left alone -- these are multi-hundred
     -megabyte downloads and re-fetching them is pure waste.
     """
-    config.DOWNLOAD_CACHE.mkdir(parents=True, exist_ok=True)
+    config.ensure_dir(config.DOWNLOAD_CACHE, "download_cache")
 
     if entry.cached.exists() and not force:
         if verify(entry):
@@ -463,7 +694,7 @@ def ensure_base(entry: CatalogueEntry) -> Path:
         )
 
     cached = download(entry)
-    config.BASES_DIR.mkdir(parents=True, exist_ok=True)
+    config.ensure_dir(config.BASES_DIR, "bases_dir")
     tmp = base.with_suffix(".qcow2.tmp")
 
     if is_archive(entry):

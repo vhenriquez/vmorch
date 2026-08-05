@@ -138,6 +138,60 @@ def main() -> int:
                 if v is not None:
                     setattr(tui_app.boxlib, k, v)
 
+    # --- act_rmimage: deletes files, so it must be executed, not grepped -----
+    #
+    # It reaches into cli.describe_removal and into a RemovalPlan's fields. Both
+    # are easy to break from the other side of the codebase, and the failure
+    # mode is a traceback in the middle of a dialog that is about to delete
+    # several gigabytes.
+    from vmorch import images as images_mod
+    demo_entry = images_mod.CatalogueEntry(
+        key="demo-image", description="a test image", url="https://x/y.qcow2")
+    fake_plan = images_mod.RemovalPlan(
+        key="demo-image", description="a test image", entry=demo_entry,
+        base=Path("/tmp/does-not-exist/demo-image.qcow2"),
+        in_catalogue=True, sizes=(("base", 1234567),),
+    )
+    real_catalogue = images_mod.catalogue
+    images_mod.catalogue = lambda **kw: {"demo-image": demo_entry}
+    a = make_app()
+    a.task = lambda title, fn, note="": fn()
+    tui_ui.choose = lambda *a, **k: "demo-image"
+    tui_ui.form = lambda *a, **k: {"keep_cache": False, "keep_entry": False,
+                                   "force": False}
+    tui_ui.pager = lambda *a, **k: None
+    tui_ui.confirm = lambda *a, **k: True
+    saved = (images_mod.plan_removal, images_mod.remove)
+    removed = {}
+    images_mod.plan_removal = lambda key, **kw: fake_plan
+    images_mod.remove = lambda p, force=False: removed.setdefault("plan", p) or p
+    try:
+        a.act_rmimage()
+        failures += check("act_rmimage runs and removes", "plan" in removed)
+        failures += check("act_rmimage reports what it freed",
+                          "1.2M" in a.status, a.status)
+    except Exception as exc:                           # noqa: BLE001
+        failures += check("act_rmimage runs and removes", False,
+                          f"{type(exc).__name__}: {exc}")
+    finally:
+        images_mod.plan_removal, images_mod.remove = saved
+
+    # Cancelling at the confirmation must delete nothing.
+    a = make_app()
+    a.task = lambda title, fn, note="": fn()
+    tui_ui.confirm = lambda *a, **k: False
+    cancelled = {}
+    images_mod.plan_removal = lambda key, **kw: fake_plan
+    images_mod.remove = lambda p, force=False: cancelled.setdefault("ran", True)
+    try:
+        a.act_rmimage()
+        failures += check("declining the confirmation removes nothing",
+                          "ran" not in cancelled)
+    finally:
+        images_mod.plan_removal, images_mod.remove = saved
+        images_mod.catalogue = real_catalogue
+    tui_ui.confirm = lambda *a, **k: True
+
     # --- the detail panel must render every box option ----------------------
     a = make_app(fake_box(sudo="nopasswd", nested=True))
     a.rebuild_rows = tui_app.App.rebuild_rows.__get__(a)

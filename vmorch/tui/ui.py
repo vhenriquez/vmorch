@@ -330,16 +330,23 @@ def choose(stdscr, title: str, options: list[tuple[str, object]],
             idx = (idx + 1) % len(labels)
 
 
-def form(stdscr, title: str, fields: list[dict], note: str = ""):
+def form(stdscr, title: str, fields: list[dict], note: str = "",
+         action: str = "create"):
     """A settings sheet: every option visible at once, edit any, then confirm.
 
     Chosen over a chain of prompts because a wizard hides what it does not ask
     about. Here the whole configuration is on screen, defaults included, so an
     option nobody thought to change is still seen rather than silently applied.
 
+    `action` names the confirming verb and supplies its key -- "create" is C,
+    "remove" is R. It is a parameter because a form that deletes things must not
+    label its confirm key "create"; a user who has learned that C means create
+    should not find it removing an image.
+
     Each field: {key, label, value, help, type: text|choice|bool, options}
     Returns {key: value} or None if cancelled.
     """
+    confirm_key = action[0].lower()
     idx = 0
     width = min(max(74, max(len(f["label"]) for f in fields) + 40),
                 stdscr.getmaxyx()[1] - 4)
@@ -368,13 +375,14 @@ def form(stdscr, title: str, fields: list[dict], note: str = ""):
                 if fields[idx].get("risky") else attr(DIM))
 
         put(stdscr, y + height - 2, x + 2,
-            "↑↓ move   Enter change   C create   Esc cancel", attr(DIM))
+            f"↑↓ move   Enter change   {confirm_key.upper()} {action}   "
+            "Esc cancel", attr(DIM))
         stdscr.refresh()
 
         k = stdscr.getch()
         if k == 27:
             return None
-        if k in (ord("c"), ord("C")):
+        if k in (ord(confirm_key), ord(confirm_key.upper())):
             return {f["key"]: f["value"] for f in fields}
         if k in (curses.KEY_UP, ord("k")):
             idx = (idx - 1) % len(fields)
