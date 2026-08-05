@@ -26,6 +26,7 @@ from pathlib import Path
 from .. import boxes as boxlib
 from .. import virsh
 from .. import config, consoletext, images, network
+from .. import nets as netlib
 from ..spec import BoxSpec
 from . import ui
 from .ui import attr, frame, fill, put
@@ -52,9 +53,27 @@ OPTION_HELP = {
 #: colour so the risky setting is never the quiet one.
 RISKY_WHEN_ON = {"lan", "nested"}
 
+# The bottom strip. Ten slots, and the scarcest space in the interface, so a
+# slot has to earn itself twice over: by being reached often, and by not being
+# somewhere obvious already.
+#
+# F1/F3/F4/F7/F8/F9/F10 keep their Norton Commander meanings, because the muscle
+# memory is real and free. The three with no Commander equivalent are chosen on
+# frequency:
+#
+#   F2  Apply     the core loop of a *reconfigurable* sandbox is edit-then-apply.
+#                 It sat in the menu with no key while F2 held Snap.
+#   F5  Share     Commander's F5 is copy; attaching a folder is the nearest
+#                 thing, and it is the commonest way to give an agent its work.
+#   F6  Net       attach a box to a local network. Pairs with F5: both are
+#                 "give this box a resource".
+#
+# Demoted, deliberately: Snap and Srvc. Both are set-once-per-box operations --
+# a keybar slot for something used once in a box's life is a slot wasted, and
+# both are one keystroke away in the menu.
 KEYBAR = [
-    ("1", "Help"), ("2", "Snap"), ("3", "View"), ("4", "Edit"), ("5", "Share"),
-    ("6", "Srvc"), ("7", "New"), ("8", "Del"), ("9", "Menu"), ("10", "Quit"),
+    ("1", "Help"), ("2", "Apply"), ("3", "View"), ("4", "Edit"), ("5", "Share"),
+    ("6", "Net"), ("7", "New"), ("8", "Del"), ("9", "Menu"), ("10", "Quit"),
 ]
 
 
@@ -100,26 +119,40 @@ MENUS: dict[str, tuple[str, list[Entry]]] = {
         Entry.sep("This box"),
         Entry("Connect over ssh", "ssh", "c", "Enter"),
         Entry("Start / stop", "toggle", "s", "Space"),
+        Entry("Apply spec (reconcile)", "apply", "a", "F2"),
         Entry("Edit box spec", "edit", "e", "F4"),
-        Entry("Apply spec (reconcile)", "apply", "a"),
         Entry.sep("More for this box"),
-        Entry("Disk and snapshots...", "menu:storage", "d"),
         Entry("Folders and services...", "menu:sharing", "f"),
+        Entry("Networks...", "menu:networks", "n", "F6"),
+        Entry("Disk and snapshots...", "menu:storage", "d"),
         Entry("Privileges and hardware...", "menu:privilege", "p"),
         Entry("Troubleshoot...", "menu:trouble", "t"),
         Entry("Destroy box", "del", "x", "F8"),
         Entry.sep("Everything else"),
-        Entry("New box", "new", "n", "F7", box=False),
+        Entry("New box", "new", "w", "F7", box=False),
         Entry("Images...", "menu:images", "i", box=False),
         Entry("Host and settings...", "menu:system", "h", box=False),
         Entry("Help", "help", "?", "F1", box=False),
         Entry("Quit", "quit", "q", "F10", box=False),
     ]),
+    # Both scopes live here because they are the same subject, which is the
+    # distinction that matters: the earlier menu mixed things with no relation
+    # at all. Headers keep "this box" and "all networks" apart.
+    "networks": ("Networks", [
+        Entry.sep("This box"),
+        Entry("Attach to a local network", "netattach", "a"),
+        Entry("Detach from a local network", "netdetach", "d"),
+        Entry("Change internet / LAN access", "edit", "i", "F4"),
+        Entry.sep("Local networks — members-only, no gateway or internet"),
+        Entry("List networks and their members", "netls", "l", box=False),
+        Entry("Create a local network", "netcreate", "c", box=False),
+        Entry("Delete a local network", "netrm", "r", box=False),
+    ]),
     "storage": ("Disk and snapshots", [
         Entry.sep("Disk"),
         Entry("Grow the disk (never shrinks)", "disk", "g"),
         Entry.sep("Snapshots — box must be stopped"),
-        Entry("Take a snapshot", "snap", "t", "F2"),
+        Entry("Take a snapshot", "snap", "t"),
         Entry("Roll back to a snapshot", "rollback", "r"),
     ]),
     "sharing": ("Folders and services", [
@@ -127,7 +160,7 @@ MENUS: dict[str, tuple[str, list[Entry]]] = {
         Entry("Share a folder", "share", "s", "F5"),
         Entry("Re-mount shared folders", "mount", "m"),
         Entry.sep("Host services"),
-        Entry("Grant a host service", "service", "g", "F6"),
+        Entry("Grant a host service", "service", "g"),
         Entry.sep("To revoke either, select it on the right and press F8"),
     ]),
     "privilege": ("Privileges and hardware", [
@@ -136,7 +169,7 @@ MENUS: dict[str, tuple[str, list[Entry]]] = {
         Entry("Show the sudo password", "password", "p"),
         Entry.sep("Hardware exposed to the box"),
         Entry("Toggle nested virtualisation", "nested", "n"),
-        Entry.sep("Network access is in the spec — Edit box spec (F4)"),
+        Entry.sep("Network access lives under Networks (F6)"),
     ]),
     "trouble": ("Troubleshoot", [
         Entry("View console log", "view", "v", "F3"),
@@ -720,6 +753,118 @@ class App:
                            "it and repeat to grow the filesystem")
         self.refresh_boxes()
 
+    # -- local networks ---------------------------------------------------
+
+    def act_netls(self) -> None:
+        found = netlib.list_nets()
+        if not found:
+            ui.message(self.stdscr, "Local networks",
+                       "No local networks yet.\n\n"
+                       "A local network is a members-only segment: boxes on the "
+                       "same one reach each other, and nothing else — no "
+                       "gateway, no host, no internet.\n\n"
+                       "Create one from this menu, then attach boxes to it.")
+            return
+        lines = []
+        for net in found:
+            members = boxlib.boxes_on_net(net.name)
+            lines.append(f"{net.name:<12} {net.subnet:<20} {net.bridge}")
+            for box in members:
+                lines.append(f"{'':<12}   {box} — {net.address(box)}")
+            if not members:
+                lines.append(f"{'':<12}   (no boxes attached)")
+            lines.append("")
+        lines.append(f"definitions: {netlib.NETS_FILE}")
+        ui.pager(self.stdscr, "Local networks", "\n".join(lines))
+
+    def act_netcreate(self) -> None:
+        name = ui.prompt(self.stdscr, "Create a local network",
+                         f"Name (max {netlib.NAME_MAX} chars):")
+        if not name or not name.strip():
+            return
+        res = self.task(
+            "Creating network", lambda: netlib.create(name.strip()),
+            "Defining an isolated segment with no gateway and no host address.")
+        if res is None:
+            return
+        self.status = f"Created {res.name} — {res.subnet}"
+        ui.message(self.stdscr, f"Created {res.name}",
+                   f"subnet {res.subnet}\nbridge {res.bridge}\n\n"
+                   "Members-only: no gateway, no host address, no internet.\n\n"
+                   "Attach a box to it from this menu (F6).")
+
+    def act_netrm(self) -> None:
+        found = netlib.list_nets()
+        if not found:
+            ui.message(self.stdscr, "Delete a network", "None defined.")
+            return
+        name = ui.choose(
+            self.stdscr, "Delete which network?",
+            [ui.Choice(label=f"{n.name:<12} {n.subnet}", value=n.name,
+                       hint=f"{len(boxlib.boxes_on_net(n.name))} box(es)")
+             for n in found])
+        if name is None:
+            return
+        attached = boxlib.boxes_on_net(name)
+        if attached:
+            ui.error(self.stdscr,
+                     f"{name} still has {', '.join(attached)} attached. "
+                     "Detach them first.")
+            return
+        if not ui.confirm(self.stdscr, "Delete network",
+                          f"Delete the local network {name}?", danger=True):
+            return
+        if self.task("Deleting", lambda: netlib.remove(name, [])) is not None:
+            self.status = f"Deleted network {name}"
+
+    def act_netattach(self) -> None:
+        box = self.current
+        if not box:
+            return
+        available = [n for n in netlib.list_nets() if n.name not in box.spec.nets]
+        if not available:
+            ui.message(
+                self.stdscr, "Attach to a network",
+                "Nothing to attach to.\n\n"
+                + ("This box is already on every local network."
+                   if netlib.list_nets() else
+                   "No local networks exist yet — create one first."))
+            return
+        name = ui.choose(
+            self.stdscr, f"Attach {box.name} to...",
+            [ui.Choice(label=f"{n.name:<12} {n.subnet}", value=n.name,
+                       hint=n.address(box.name)) for n in available])
+        if name is None:
+            return
+        net = netlib.get(name)
+        note = (f"{box.name} will get {net.address(box.name)} on {name}. "
+                "The box restarts so the guest comes up with the interface "
+                "configured.")
+        res = self.task("Attaching",
+                        lambda: boxlib.attach_net(box.name, name), note)
+        self.refresh_boxes()
+        if res is not None:
+            self.status = (f"{box.name} on {name} at {net.address(box.name)}")
+
+    def act_netdetach(self) -> None:
+        box = self.current
+        if not box:
+            return
+        if not box.spec.nets:
+            ui.message(self.stdscr, "Detach from a network",
+                       f"{box.name} is not on any local network.")
+            return
+        name = ui.choose(self.stdscr, f"Detach {box.name} from...",
+                         [ui.Choice(label=n, value=n) for n in box.spec.nets])
+        if name is None:
+            return
+        res = self.task("Detaching",
+                        lambda: boxlib.detach_net(box.name, name),
+                        "The box restarts without the interface.")
+        self.refresh_boxes()
+        if res is not None:
+            self.status = f"{box.name} detached from {name}"
+
     def act_rmimage(self) -> None:
         """Delete an image: golden base, cached download and catalogue entry.
 
@@ -1013,6 +1158,9 @@ class App:
             "password": self.act_password, "nested": self.act_nested,
             "disk": self.act_disk, "rmimage": self.act_rmimage,
             "rollback": self.act_rollback,
+            "netls": self.act_netls, "netcreate": self.act_netcreate,
+            "netrm": self.act_netrm, "netattach": self.act_netattach,
+            "netdetach": self.act_netdetach,
         }
         if choice in actions:
             actions[choice]()
@@ -1145,7 +1293,8 @@ class App:
             elif k in (curses.KEY_F1, ord("?")):
                 self.act_help()
             elif k == curses.KEY_F2:
-                self.act_snapshot()
+                if self.current:
+                    self.do_apply(self.current.name)
             elif k == curses.KEY_F3:
                 self.act_view()
             elif k == curses.KEY_F4:
@@ -1153,7 +1302,7 @@ class App:
             elif k == curses.KEY_F5:
                 self.act_share()
             elif k == curses.KEY_F6:
-                self.act_service()
+                self.act_menu("networks")
             elif k == curses.KEY_F7:
                 self.act_new()
             elif k in (curses.KEY_F8, curses.KEY_DC):

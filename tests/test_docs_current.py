@@ -46,9 +46,17 @@ def docs_text() -> str:
 
 
 def cli_surface() -> tuple[set[str], set[str]]:
-    """Subcommands and long flags, read from the parser definition."""
+    """Subcommands and long flags, read from the parser definition.
+
+    Nested subcommands come back as "net create", which is what a user types and
+    what the docs must show. Matching on the bare word instead reported `create`
+    as a top-level command and then looked for "vm create" in the docs.
+    """
     src = (ROOT / "vmorch" / "cli.py").read_text()
-    commands = set(re.findall(r'sub\.add_parser\(\s*"([a-z-]+)"', src))
+    commands = set(re.findall(
+        r'(?<![A-Za-z_])sub\.add_parser\(\s*"([a-z-]+)"', src))
+    commands |= {f"net {c}" for c in
+                 re.findall(r'netsub\.add_parser\(\s*"([a-z-]+)"', src)}
     flags = set(re.findall(r'add_argument\(\s*"(--[a-z-]+)"', src))
     return commands, flags
 

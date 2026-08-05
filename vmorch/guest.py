@@ -179,6 +179,61 @@ echo "wrote {WAN_NETPLAN}"
 """)
 
 
+#: One file for every local net NIC, rewritten whole. Sorts after cloud-init's
+#: 50- and after the wan file, and being a single file means detaching a net
+#: removes its stanza rather than leaving an orphan behind.
+NETS_NETPLAN = "/etc/netplan/61-vmorch-nets.yaml"
+
+
+def configure_nets(name: str, attachments: list[tuple[str, str, str]]) -> str:
+    """Give the guest a static address on each local net it is attached to.
+
+    `attachments` is (net name, mac, address) per net.
+
+    Static rather than DHCP because a local net has no dnsmasq -- it has no host
+    address at all, which is what makes it members-only. The addresses are known
+    before either box boots, so writing them straight in is both simpler and
+    better: a box can reach a peer the instant both are up, with no lease to
+    wait for.
+
+    /24 is assumed, matching what `vm net create` hands out.
+
+    Written whole every time and deleted when nothing is attached, so detaching
+    a net actually removes its configuration instead of leaving an interface
+    the guest still tries to bring up.
+    """
+    if not attachments:
+        return run(name, f"rm -f {NETS_NETPLAN}; netplan generate || true",
+                   check=False)
+
+    stanzas = []
+    for net_name, mac, address in attachments:
+        stanzas += [
+            f"    {net_name}:",
+            "      match:",
+            f'        macaddress: "{mac}"',
+            f"      addresses: [{address}/24]",
+            "      dhcp4: false",
+            "      dhcp6: false",
+        ]
+    body = "\n".join(stanzas)
+
+    return run(name, f"""set -e
+cat > {NETS_NETPLAN} <<'YAML'
+# Written by vmorch. One stanza per local network this box is attached to.
+# Static because a local net has no DHCP server by design -- it has no host
+# address at all. Matched by MAC, since interface names follow PCI order.
+network:
+  version: 2
+  ethernets:
+{body}
+YAML
+chmod 600 {NETS_NETPLAN}
+netplan generate
+echo "wrote {NETS_NETPLAN}"
+""")
+
+
 def has_wan_config(name: str) -> bool:
     """True if the guest already has config for a second NIC.
 

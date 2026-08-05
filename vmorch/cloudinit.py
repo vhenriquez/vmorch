@@ -175,7 +175,8 @@ def meta_data(spec: BoxSpec, instance_id: str | None = None) -> str:
             f"local-hostname: {spec.name}\n")
 
 
-def network_config(spec: BoxSpec, mgmt_mac: str, wan_mac: str) -> str:
+def network_config(spec: BoxSpec, mgmt_mac: str, wan_mac: str,
+                   nets: list[tuple[str, str, str]] | None = None) -> str:
     """Netplan config for the seed. Required, not optional.
 
     cloud-init's fallback config only ever brings up **one** interface. With
@@ -219,11 +220,26 @@ def network_config(spec: BoxSpec, mgmt_mac: str, wan_mac: str) -> str:
             "    dhcp4: true",
             "    dhcp6: false",
         ]
+
+    # Local nets are static: the segment has no DHCP server, because it has no
+    # host address at all -- that is what makes it members-only. Putting them in
+    # the seed means a box created already attached comes up on its nets at
+    # first boot, with no apply needed afterwards.
+    for net_name, mac, address in (nets or []):
+        lines += [
+            f"  {net_name}:",
+            "    match:",
+            f'      macaddress: "{mac}"',
+            f"    addresses: [{address}/24]",
+            "    dhcp4: false",
+            "    dhcp6: false",
+        ]
     return "\n".join(lines) + "\n"
 
 
 def build_seed(spec: BoxSpec, out_dir: Path, mgmt_mac: str, wan_mac: str,
-               instance_id: str | None = None) -> Path:
+               instance_id: str | None = None,
+               nets: list[tuple[str, str, str]] | None = None) -> Path:
     """Write a NoCloud seed ISO. Returns its path."""
     out_dir.mkdir(parents=True, exist_ok=True)
     ud = out_dir / "user-data"
@@ -231,7 +247,7 @@ def build_seed(spec: BoxSpec, out_dir: Path, mgmt_mac: str, wan_mac: str,
     nc = out_dir / "network-config"
     ud.write_text(user_data(spec))
     md.write_text(meta_data(spec, instance_id))
-    nc.write_text(network_config(spec, mgmt_mac, wan_mac))
+    nc.write_text(network_config(spec, mgmt_mac, wan_mac, nets))
 
     seed = out_dir / "seed.iso"
     subprocess.run(

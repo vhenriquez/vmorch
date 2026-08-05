@@ -70,6 +70,16 @@ ALLOC_IP_LAST = 254
 # The NAT network used for `internet = true`. libvirt ships this.
 NAT_NET = "default"
 
+# --- local networks ----------------------------------------------------------
+#
+# Members-only segments boxes can be attached to, one /24 taken from this pool
+# per network. Chosen to sit above the management network and clear of it, the
+# LAN (192.168.1.0/24), the host's wifi (192.168.4.0/24) and libvirt's default
+# (192.168.122.0/24). Nothing routes here -- these segments have no gateway --
+# so a clash would only ever confuse a guest's own routing table, but there is
+# no reason to invite one.
+LOCALNET_POOL = _value("localnet_pool", "192.168.160.0/20")
+
 # RFC1918 + link-local. Dropped on the internet NIC unless `lan = true`.
 # The real LAN (192.168.1.0/24) falls inside 192.168/16, so this does bite.
 PRIVATE_RANGES = [

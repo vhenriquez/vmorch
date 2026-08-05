@@ -18,8 +18,8 @@ from datetime import datetime
 from pathlib import Path
 
 from . import (alloc, cloudinit, config, domain, guest, hostaccess, images,
-               network, services, snapshots, spec as spec_mod, sshconf,
-               virsh)
+               nets as netlib, network, services, snapshots, spec as spec_mod,
+               sshconf, virsh)
 from .spec import BoxSpec
 
 
@@ -256,10 +256,12 @@ def create(box_spec: BoxSpec, start: bool = True) -> Box:
     spec_path(box_spec.name).write_text(spec_mod.dump(box_spec))
 
     services.ensure_box_filter(box_spec)
+    _ensure_net_filters(box_spec)
 
     disk = _create_overlay(box_spec, base)
     seed = cloudinit.build_seed(box_spec, box_dir(box_spec.name),
-                                allocation.mac, allocation.wan_mac)
+                                allocation.mac, allocation.wan_mac,
+                                nets=net_attachments(box_spec))
     _ensure_console_log(box_spec.name)
 
     xml = domain.build(
@@ -284,6 +286,67 @@ def create(box_spec: BoxSpec, start: bool = True) -> Box:
         virsh.run("start", box_spec.domain)
 
     return load(box_spec.name)
+
+
+def _ensure_net_filters(box_spec: BoxSpec) -> None:
+    """Define this box's per-net filters before the domain references them.
+
+    libvirt refuses a domain whose <filterref> names a filter that does not
+    exist, so this has to run before define_domain -- and it has to run on every
+    apply, because the pinned address moves if the box's allocation ever does.
+    """
+    for name in box_spec.nets:
+        netlib.ensure(netlib.get(name))
+        netlib.ensure_box_filter(netlib.get(name), box_spec.name)
+
+
+def net_attachments(box_spec: BoxSpec) -> list[tuple[str, str, str]]:
+    """(net, mac, address) for each local net, for the guest's netplan."""
+    out = []
+    for name in box_spec.nets:
+        net = netlib.get(name)
+        out.append((name, net.mac(box_spec.name), net.address(box_spec.name)))
+    return out
+
+
+def attach_net(name: str, net_name: str) -> Box:
+    """Put a box on a local network. Restarts it if it is running.
+
+    A restart rather than a hot-plug: the guest needs its address written before
+    the interface exists, and `apply` already does exactly that for every other
+    spec change. One code path beats a second, live one that can disturb the
+    network a working agent is on.
+    """
+    netlib.get(net_name)                    # raises if the net does not exist
+    box = load(name)
+    if net_name in box.spec.nets:
+        raise BoxError(f"{name} is already attached to {net_name}")
+    box.spec.nets.append(net_name)
+    save_spec(box.spec)
+    return apply(name)
+
+
+def detach_net(name: str, net_name: str) -> Box:
+    box = load(name)
+    if net_name not in box.spec.nets:
+        raise BoxError(f"{name} is not attached to {net_name}")
+    box.spec.nets.remove(net_name)
+    save_spec(box.spec)
+    result = apply(name)
+    netlib.delete_box_filter(net_name, name)
+    return result
+
+
+def boxes_on_net(net_name: str) -> list[str]:
+    """Names of boxes whose spec attaches them to this local network."""
+    found = []
+    for name in list_names():
+        try:
+            if net_name in spec_mod.load(spec_path(name)).nets:
+                found.append(name)
+        except Exception:                             # noqa: BLE001
+            continue
+    return found
 
 
 def _disk_shortfall(name: str, box_spec: BoxSpec) -> int:
@@ -351,6 +414,9 @@ def apply(name: str) -> Box:
     shortfall = _disk_shortfall(name, box.spec)
     allocation = alloc.allocate(name)
     services.ensure_box_filter(box.spec)
+    # Before domain.build: libvirt refuses a domain whose <filterref> names a
+    # filter that does not exist yet.
+    _ensure_net_filters(box.spec)
 
     xml = domain.build(
         box.spec,
@@ -386,6 +452,21 @@ def apply(name: str) -> Box:
             # reporting a clean success over a network that will not come up.
             wan_note = f"could not configure the internet NIC: {exc}"
 
+    # Local nets, same rules: written before the restart, over ssh, and rewritten
+    # whole so detaching removes the stanza rather than orphaning an interface
+    # the guest keeps trying to raise.
+    net_note = ""
+    if was_running:
+        try:
+            guest.configure_nets(name, net_attachments(box.spec))
+            if box.spec.nets:
+                net_note = f"attached to {', '.join(box.spec.nets)}"
+        except guest.GuestError as exc:
+            net_note = f"could not configure local networks: {exc}"
+    elif box.spec.nets:
+        net_note = (f"{name} is stopped; its local network addresses will be "
+                    "written the next time it is applied while running")
+
     if was_running:
         _graceful_restart_stop(name)
 
@@ -404,7 +485,7 @@ def apply(name: str) -> Box:
         resize_disk(name, box.spec.disk)
 
     applied = load(name)
-    applied.note = wan_note
+    applied.note = "; ".join(n for n in (wan_note, net_note) if n)
     return applied
 
 
@@ -439,6 +520,11 @@ def destroy(name: str, keep_disk: bool = False) -> None:
         shutil.rmtree(box_dir(name), ignore_errors=True)
 
     services.delete_box_filter(name)
+    # Per-net filters too. A leftover blocks `vm net rm` on a network whose last
+    # box is gone, and would be inherited by a box recreated under the same name
+    # -- carrying a pinned address that may no longer be the one it is given.
+    for net_name in box.spec.nets:
+        netlib.delete_box_filter(net_name, name)
     network.unreserve_address(name, allocation.mac, box.ip)
     alloc.release(name)
     _regenerate_ssh()
@@ -537,7 +623,8 @@ def reseed(name: str) -> Box:
     stamp = datetime.now().strftime("%Y%m%d%H%M%S")
     cloudinit.build_seed(box.spec, box_dir(name), allocation.mac,
                          allocation.wan_mac,
-                         instance_id=f"{box.spec.domain}-{stamp}")
+                         instance_id=f"{box.spec.domain}-{stamp}",
+                         nets=net_attachments(box.spec))
 
     # Reseeding regenerates the box's ssh host keys, so the entry we already
     # trust is about to become wrong. Left in place it produces "Host key

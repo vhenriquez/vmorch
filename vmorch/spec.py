@@ -81,6 +81,11 @@ class BoxSpec:
     nested: bool = False
     internet: bool = False
     lan: bool = False
+    #: Local networks this box is attached to, by name. Each one becomes a NIC
+    #: on a members-only segment shared with the other boxes on it -- the single
+    #: deliberate exception to box-to-box isolation, which is why it is a list
+    #: of names you opted into rather than a boolean.
+    nets: list[str] = field(default_factory=list)
     folders: list[Folder] = field(default_factory=list)
     from_host: list[Service] = field(default_factory=list)
     to_host: list[Service] = field(default_factory=list)
@@ -117,6 +122,31 @@ def _parse_mode(raw: object, tag: str) -> str:
             "Treating as 'ro'."
         )
     return raw.strip().lower()
+
+
+def _parse_nets(raw: object) -> list[str]:
+    """Local network names, de-duplicated, order preserved.
+
+    A string is accepted where a list was meant -- `nets = "lab"` is an obvious
+    intent and failing on it teaches nothing. Anything else raises: a net name
+    that silently does not apply is a box quietly missing a NIC it was supposed
+    to have.
+    """
+    if raw in (None, ""):
+        return []
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        raise SpecError(f"network.nets must be a list of names, got {raw!r}")
+
+    out: list[str] = []
+    for item in raw:
+        if not isinstance(item, str) or not item.strip():
+            raise SpecError(f"network.nets entries must be names, got {item!r}")
+        name = item.strip()
+        if name not in out:
+            out.append(name)
+    return out
 
 
 def _parse_sudo(raw: object) -> str:
@@ -203,6 +233,7 @@ def parse(data: dict, name: str | None = None) -> BoxSpec:
         nested=bool(data.get("nested", False)),
         internet=bool(network.get("internet", False)),
         lan=bool(network.get("lan", False)),
+        nets=_parse_nets(network.get("nets", [])),
         folders=folders,
         from_host=[
             _parse_service(s, i, VALID_VIA_FROM_HOST, "filter")
@@ -243,6 +274,9 @@ def dump(spec: BoxSpec) -> str:
         "# Reaching the router/NAS/other machines needs lan = true.",
         f"internet = {str(spec.internet).lower()}",
         f"lan = {str(spec.lan).lower()}",
+        "# nets: local networks this box shares with other boxes. Members-only",
+        "# segments -- no gateway, no host, no internet. `vm net ls` lists them.",
+        "nets = [" + ", ".join(f'"{n}"' for n in spec.nets) + "]",
         "",
     ]
 

@@ -176,6 +176,23 @@ def _interfaces_xml(spec: BoxSpec, mac: str, wan_mac: str) -> str:
     </interface>"""
         )
 
+    # nic2+: local networks. One per attached net, and pointedly NOT
+    # port-isolated -- reaching the other members is the entire purpose. That
+    # makes this the only place in the tool where box-to-box traffic is allowed,
+    # which is why the filter pins the address: members may talk, but none of
+    # them may pretend to be another.
+    from . import nets as netlib
+    for name in spec.nets:
+        net = netlib.get(name)
+        interfaces.append(
+            f"""    <interface type='network'>
+      <source network='{net.libvirt_name}'/>
+      <mac address='{net.mac(spec.name)}'/>
+      <model type='virtio'/>
+      <filterref filter='{netlib.box_filter_name(name, spec.name)}'/>
+    </interface>"""
+        )
+
     return "\n".join(interfaces)
 
 

@@ -29,6 +29,13 @@ ALIASES = {
     "snapshot": "snap",
     "start": "toggle",
     "stop": "toggle",
+    # `vm net` grew subcommands. They are nested under one parser in the CLI and
+    # under one submenu in the TUI, so they are checked by their full names.
+    "net ls": "netls",
+    "net create": "netcreate",
+    "net rm": "netrm",
+    "net attach": "netattach",
+    "net detach": "netdetach",
 }
 
 #: CLI commands the TUI is not expected to expose, with the reason.
@@ -84,8 +91,18 @@ def cli_new_flags() -> set[str]:
 
 
 def cli_commands() -> set[str]:
+    """Every subcommand, nested ones included.
+
+    `netsub.add_parser("create")` also ends in `sub.add_parser`, so a naive
+    pattern reported `create` as a top-level command and demanded a menu entry
+    called that. Nested ones are reported as "net create", which is what a user
+    types and what ALIASES maps.
+    """
     cli = (ROOT / "vmorch" / "cli.py").read_text()
-    return set(re.findall(r'sub\.add_parser\(\s*"([a-z]+)"', cli))
+    top = set(re.findall(r'(?<![A-Za-z_])sub\.add_parser\(\s*"([a-z]+)"', cli))
+    nested = {f"net {c}" for c in
+              re.findall(r'netsub\.add_parser\(\s*"([a-z]+)"', cli)}
+    return top | nested
 
 
 def main() -> int:
@@ -160,6 +177,32 @@ def main() -> int:
         # Headers are labels only; an entry is one or the other.
         failures += report(f"'{name}' keeps headers valueless",
                            {e.label for e in entries if e.header and e.value})
+
+    # --- the keybar -------------------------------------------------------
+    #
+    # The bottom strip is the scarcest space in the interface, so what sits
+    # there is a real decision. These check the strip stays honest rather than
+    # drifting out of step with the keys the loop actually binds.
+    from vmorch.tui.app import KEYBAR
+    labels = {num: label for num, label in KEYBAR}
+    failures += report("the keybar has ten slots",
+                       set() if len(KEYBAR) == 10 else {str(len(KEYBAR))})
+
+    # Norton Commander meanings that are free to keep, so they are kept.
+    for num, expected in (("1", "Help"), ("3", "View"), ("4", "Edit"),
+                          ("7", "New"), ("8", "Del"), ("9", "Menu"),
+                          ("10", "Quit")):
+        failures += report(f"F{num} keeps its Commander meaning ({expected})",
+                           set() if labels.get(num) == expected
+                           else {f"F{num} is {labels.get(num)!r}"})
+
+    # Every labelled key must actually be bound in the event loop, or the strip
+    # advertises something that does nothing.
+    loop = SRC[SRC.index("def loop("):]
+    for num in labels:
+        token = "KEY_DC" if num == "8" else f"KEY_F{num}"
+        failures += report(f"F{num} ({labels[num]}) is bound in the loop",
+                           set() if f"KEY_F{num}" in loop else {token})
 
     # Options, not just commands. --nested shipped CLI-only because nothing
     # checked this, which is the whole reason the check exists.

@@ -6,8 +6,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import (audit, boxes, config, consoletext, golden, images, network,
-               snapshots, spec as spec_mod, virsh)
+from . import (audit, boxes, config, consoletext, golden, images, nets,
+               network, snapshots, spec as spec_mod, virsh)
 from .spec import BoxSpec
 
 
@@ -568,8 +568,56 @@ def cmd_audit(args) -> None:
           f"{' (blocked only)' if args.blocked else ''}")
 
 
+def cmd_net_ls(args) -> None:
+    found = nets.list_nets()
+    if not found:
+        print("no local networks. Create one with `vm net create lab`")
+        print("\nA local network is a members-only segment: boxes attached to")
+        print("the same one reach each other, and nothing else -- no gateway,")
+        print("no host, no internet.")
+        return
+    print(f"  {'NAME':<12}{'SUBNET':<20}{'BRIDGE':<16}BOXES")
+    for net in found:
+        attached = boxes.boxes_on_net(net.name)
+        print(f"  {net.name:<12}{net.subnet:<20}{net.bridge:<16}"
+              f"{', '.join(attached) or '-'}")
+    print(f"\n  addresses are the box's management octet on each net"
+          f"\n  definitions: {nets.NETS_FILE}")
+
+
+def cmd_net_create(args) -> None:
+    net = nets.create(args.name, subnet=args.subnet)
+    print(f"created local network {net.name}")
+    print(f"  subnet  {net.subnet}   bridge {net.bridge}")
+    print(f"  members only: no gateway, no host address, no internet")
+    print(f"\nattach a box:  vm net attach <box> {net.name}")
+
+
+def cmd_net_rm(args) -> None:
+    attached = boxes.boxes_on_net(args.name)
+    nets.remove(args.name, attached)
+    print(f"removed local network {args.name}")
+
+
+def cmd_net_attach(args) -> None:
+    net = nets.get(args.net)
+    print(f"attaching {args.box} to {args.net} "
+          f"({net.address(args.box)}) ...")
+    box = boxes.attach_net(args.box, args.net)
+    print(f"attached. {box.name} is {box.state}")
+    if box.note:
+        print(f"  {box.note}")
+
+
+def cmd_net_detach(args) -> None:
+    box = boxes.detach_net(args.box, args.net)
+    print(f"detached {args.box} from {args.net}. {box.name} is {box.state}")
+    if box.note:
+        print(f"  {box.note}")
+
+
 def cmd_net(args) -> None:
-    if args.prune:
+    if getattr(args, "prune", False):
         live = {b.name for b in boxes.list_boxes()}
         removed = network.prune_reservations(live)
         print(f"removed {len(removed)} stale DHCP reservation(s)"
@@ -761,10 +809,37 @@ def build_parser() -> argparse.ArgumentParser:
                     help="keep control codes even when piped")
     lg.set_defaults(func=cmd_logs)
 
-    nt = sub.add_parser("net", help="ensure the management network exists")
+    nt = sub.add_parser("net", help="networks: the management one, and local "
+                                    "segments boxes can share")
     nt.add_argument("--prune", action="store_true",
                     help="drop DHCP reservations for boxes that no longer exist")
     nt.set_defaults(func=cmd_net)
+    # Nested, and optional: bare `vm net` keeps meaning "ensure the management
+    # network", which is what it has always meant and what the docs reference.
+    netsub = nt.add_subparsers(dest="netcmd")
+
+    nls = netsub.add_parser("ls", help="list local networks and their members")
+    nls.set_defaults(func=cmd_net_ls)
+
+    ncr = netsub.add_parser("create", help="create a local network")
+    ncr.add_argument("name", help=f"name, max {nets.NAME_MAX} chars (it becomes "
+                                  "the bridge name)")
+    ncr.add_argument("--subnet", help="override the /24 chosen from the pool")
+    ncr.set_defaults(func=cmd_net_create)
+
+    nrm = netsub.add_parser("rm", help="delete a local network")
+    nrm.add_argument("name")
+    nrm.set_defaults(func=cmd_net_rm)
+
+    nat = netsub.add_parser("attach", help="put a box on a local network")
+    nat.add_argument("box")
+    nat.add_argument("net")
+    nat.set_defaults(func=cmd_net_attach)
+
+    nde = netsub.add_parser("detach", help="take a box off a local network")
+    nde.add_argument("box")
+    nde.add_argument("net")
+    nde.set_defaults(func=cmd_net_detach)
 
     return p
 
@@ -774,7 +849,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args.func(args)
     except (boxes.BoxError, golden.GoldenError, images.ImageError,
-            spec_mod.SpecError, snapshots.SnapshotError, virsh.VirshError) as exc:
+            nets.NetError, spec_mod.SpecError, snapshots.SnapshotError,
+            virsh.VirshError) as exc:
         _die(str(exc))
     return 0
 
