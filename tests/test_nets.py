@@ -119,6 +119,59 @@ def main() -> int:
                           "clean-traffic" in fxml,
                           "anti-spoofing is the whole point on a shared segment")
 
+        # --- the router role ------------------------------------------------
+        #
+        # Forwarding means emitting packets whose source belongs to somebody
+        # else, which is indistinguishable from spoofing -- so a router cannot
+        # keep the pin. Measured: with it, ping through a gateway box was 100%
+        # loss; without it on that one box, 0% loss and HTTP 200 end to end.
+        rxml = nets.box_filter_xml(LAB, "boxa", router=True)
+        failures += check("a router has no IP pin",
+                          "<parameter name='IP'" not in rxml, rxml)
+        failures += check("...but keeps clean-traffic",
+                          "clean-traffic" in rxml,
+                          "MAC and ARP anti-spoofing still apply to a router")
+        failures += check("...and still disables learning",
+                          "CTRL_IP_LEARNING" in rxml)
+        failures += check("a plain member still has the pin",
+                          "<parameter name='IP'" in nets.box_filter_xml(LAB, "boxa"))
+
+        # routes_for must name a net the box is actually on, or the spec reads
+        # as though a firewall exists where none does.
+        ok = spec_mod.parse({"name": "fw",
+                             "network": {"nets": ["lab"], "routes_for": ["lab"]}})
+        failures += check("routes_for round-trips", ok.routes_for == ["lab"])
+        failures += check("...and is written to the spec file",
+                          'routes_for = ["lab"]' in spec_mod.dump(ok))
+        try:
+            spec_mod.parse({"name": "fw",
+                            "network": {"nets": [], "routes_for": ["lab"]}})
+            failures += check("routing on a net you are not on is refused", False)
+        except spec_mod.SpecError as exc:
+            failures += check("routing on a net you are not on is refused", True)
+            failures += check("...and says how to fix it",
+                              "network.nets" in str(exc), str(exc))
+
+        # The masquerade script must not name an interface: netplan does not
+        # rename NICs, so `wan` is an id and the kernel still says enp2s0.
+        from vmorch import guest
+        script = guest.router_script(["192.168.160.0/24"])
+        failures += check("masquerade matches on subnet, not interface",
+                          "ip saddr 192.168.160.0/24" in script
+                          and "oifname" not in script, script)
+        failures += check("member-to-member traffic is not NATed",
+                          "ip daddr != 192.168.160.0/24" in script)
+        failures += check("forwarding is persisted, not just set",
+                          "sysctl.d" in script,
+                          "a router that stops routing after a reboot is the "
+                          "worst kind to debug")
+        failures += check("the nft rules are persisted too",
+                          "systemctl enable" in script,
+                          "nftables rules live in the kernel and do not survive "
+                          "a reboot")
+        failures += check("dropping the role cleans up",
+                          "disable" in guest.router_script([]))
+
         # --- the domain XML -----------------------------------------------
         box = spec_mod.parse({"name": "boxa", "network": {"nets": ["lab"]}})
         real_get = nets.get

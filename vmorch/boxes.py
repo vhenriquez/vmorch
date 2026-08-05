@@ -261,7 +261,11 @@ def create(box_spec: BoxSpec, start: bool = True) -> Box:
     disk = _create_overlay(box_spec, base)
     seed = cloudinit.build_seed(box_spec, box_dir(box_spec.name),
                                 allocation.mac, allocation.wan_mac,
-                                nets=net_attachments(box_spec))
+                                nets=net_attachments(box_spec),
+                                gateway=gateway_for(box_spec)[0],
+                                resolver=gateway_for(box_spec)[1],
+                                router_subnets=[netlib.get(n).subnet
+                                                for n in box_spec.routes_for])
     _ensure_console_log(box_spec.name)
 
     xml = domain.build(
@@ -285,6 +289,20 @@ def create(box_spec: BoxSpec, start: bool = True) -> Box:
         network.arm_filters()
         virsh.run("start", box_spec.domain)
 
+        # A router is the one box whose readiness other boxes depend on, so it
+        # is the one box `create` waits for. Its cloud-init runcmd does set up
+        # forwarding -- but runcmd finishes *after* ssh comes up, so a peer
+        # created moments later can be running, correctly pointed at the router,
+        # and getting nothing. Observed directly: one run of the same test
+        # passed and the next failed on exactly that gap. Re-running the step
+        # over ssh is idempotent, and makes the outcome deterministic rather
+        # than a race against cloud-init.
+        if box_spec.routes_for:
+            _wait_reachable(box_spec.name)
+            guest.configure_router(
+                box_spec.name,
+                [netlib.get(n).subnet for n in box_spec.routes_for])
+
     return load(box_spec.name)
 
 
@@ -296,8 +314,10 @@ def _ensure_net_filters(box_spec: BoxSpec) -> None:
     apply, because the pinned address moves if the box's allocation ever does.
     """
     for name in box_spec.nets:
-        netlib.ensure(netlib.get(name))
-        netlib.ensure_box_filter(netlib.get(name), box_spec.name)
+        net = netlib.get(name)
+        netlib.ensure(net)
+        netlib.ensure_box_filter(net, box_spec.name,
+                                 router=name in box_spec.routes_for)
 
 
 def net_attachments(box_spec: BoxSpec) -> list[tuple[str, str, str]]:
@@ -309,7 +329,7 @@ def net_attachments(box_spec: BoxSpec) -> list[tuple[str, str, str]]:
     return out
 
 
-def attach_net(name: str, net_name: str) -> Box:
+def attach_net(name: str, net_name: str, router: bool = False) -> Box:
     """Put a box on a local network. Restarts it if it is running.
 
     A restart rather than a hot-plug: the guest needs its address written before
@@ -322,6 +342,8 @@ def attach_net(name: str, net_name: str) -> Box:
     if net_name in box.spec.nets:
         raise BoxError(f"{name} is already attached to {net_name}")
     box.spec.nets.append(net_name)
+    if router and net_name not in box.spec.routes_for:
+        box.spec.routes_for.append(net_name)
     save_spec(box.spec)
     return apply(name)
 
@@ -331,6 +353,8 @@ def detach_net(name: str, net_name: str) -> Box:
     if net_name not in box.spec.nets:
         raise BoxError(f"{name} is not attached to {net_name}")
     box.spec.nets.remove(net_name)
+    if net_name in box.spec.routes_for:
+        box.spec.routes_for.remove(net_name)
     save_spec(box.spec)
     result = apply(name)
     netlib.delete_box_filter(net_name, name)
@@ -347,6 +371,47 @@ def boxes_on_net(net_name: str) -> list[str]:
         except Exception:                             # noqa: BLE001
             continue
     return found
+
+
+def router_on_net(net_name: str) -> str | None:
+    """The box that forwards for this net, if any. First one wins.
+
+    More than one router on a segment is not rejected -- it is a legitimate if
+    unusual thing to want -- but only one can supply the default route, so this
+    picks deterministically rather than by whichever spec was read first.
+    """
+    for name in sorted(boxes_on_net(net_name)):
+        try:
+            if net_name in spec_mod.load(spec_path(name)).routes_for:
+                return name
+        except Exception:                             # noqa: BLE001
+            continue
+    return None
+
+
+def gateway_for(box_spec: BoxSpec) -> tuple[str | None, str | None]:
+    """(gateway address, resolver) for a box that should route via a peer.
+
+    None for a box with its own NAT NIC: `internet = true` already gives it a
+    default route, and a second one would race. The box's own grant wins, always.
+
+    The resolver is the NAT network's, because that is the only one a box behind
+    a gateway can actually use -- the WAN filter drops DNS to anything else, so a
+    query for 1.1.1.1 is masqueraded by the router and then dropped by the
+    router's own filter.
+    """
+    if box_spec.internet:
+        return None, None
+    for name in box_spec.nets:
+        if name in box_spec.routes_for:
+            continue                       # a router does not route via itself
+        router = router_on_net(name)
+        if router:
+            try:
+                return netlib.get(name).address(router), network.nat_gateway()
+            except Exception:                         # noqa: BLE001
+                return netlib.get(name).address(router), None
+    return None, None
 
 
 def _disk_shortfall(name: str, box_spec: BoxSpec) -> int:
@@ -458,9 +523,20 @@ def apply(name: str) -> Box:
     net_note = ""
     if was_running:
         try:
-            guest.configure_nets(name, net_attachments(box.spec))
+            gw, resolver = gateway_for(box.spec)
+            guest.configure_nets(name, net_attachments(box.spec), gw, resolver)
+            # The router's own forwarding, after its addresses: masquerade rules
+            # name the subnets it fronts, which it has to be on first.
+            guest.configure_router(
+                name, [netlib.get(n).subnet for n in box.spec.routes_for])
+            bits = []
             if box.spec.nets:
-                net_note = f"attached to {', '.join(box.spec.nets)}"
+                bits.append(f"attached to {', '.join(box.spec.nets)}")
+            if box.spec.routes_for:
+                bits.append(f"routing for {', '.join(box.spec.routes_for)}")
+            if gw:
+                bits.append(f"default route via {gw}")
+            net_note = "; ".join(bits)
         except guest.GuestError as exc:
             net_note = f"could not configure local networks: {exc}"
     elif box.spec.nets:
@@ -624,7 +700,11 @@ def reseed(name: str) -> Box:
     cloudinit.build_seed(box.spec, box_dir(name), allocation.mac,
                          allocation.wan_mac,
                          instance_id=f"{box.spec.domain}-{stamp}",
-                         nets=net_attachments(box.spec))
+                         nets=net_attachments(box.spec),
+                         gateway=gateway_for(box.spec)[0],
+                         resolver=gateway_for(box.spec)[1],
+                         router_subnets=[netlib.get(n).subnet
+                                         for n in box.spec.routes_for])
 
     # Reseeding regenerates the box's ssh host keys, so the entry we already
     # trust is about to become wrong. Left in place it produces "Host key

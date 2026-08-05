@@ -185,10 +185,105 @@ echo "wrote {WAN_NETPLAN}"
 NETS_NETPLAN = "/etc/netplan/61-vmorch-nets.yaml"
 
 
-def configure_nets(name: str, attachments: list[tuple[str, str, str]]) -> str:
+ROUTER_NFT = "/etc/vmorch-router.nft"
+ROUTER_UNIT = "/etc/systemd/system/vmorch-router.service"
+
+
+def router_script(subnets: list[str]) -> str:
+    """Shell that makes a box a router for `subnets`. One source, two callers.
+
+    Used over ssh by `apply` **and** embedded in the cloud-init seed, because a
+    box created as a router has to come up routing -- wiring it into `apply`
+    alone shipped once and left `ip_forward = 0` on a brand-new firewall while
+    everything else looked configured.
+
+    Forwarding plus masquerade, and nothing else: vmorch makes the box a
+    *router*, the firewall policy on top is the owner's. That is the whole point
+    of putting a box in that position rather than a rule in the host's nwfilter.
+
+    Masquerade matches on the **source subnet**, not an output interface.
+    Interface names follow PCI enumeration order and netplan does not rename
+    them -- `wan` is a netplan id, the kernel still calls it `enp2s0`. Excluding
+    the segment's own subnet as a destination leaves member-to-member traffic
+    un-NATed, so peers keep seeing each other's real addresses.
+
+    **Persisted through a unit, not just applied.** nftables rules live in the
+    kernel and do not survive a reboot; `sysctl.d` does. Writing one and not the
+    other gives a router that works until it is restarted and then silently does
+    not -- the worst kind of failure to debug.
+
+    Idempotent: the table is replaced wholesale, and it is vmorch's own, so the
+    owner's rules in their own tables are never touched.
+    """
+    if not subnets:
+        return ("set -e\n"
+                "systemctl disable --now vmorch-router.service 2>/dev/null || true\n"
+                f"rm -f {ROUTER_NFT} {ROUTER_UNIT} "
+                "/etc/sysctl.d/99-vmorch-router.conf\n"
+                "nft delete table ip vmorch_nat 2>/dev/null || true\n"
+                "sysctl -qw net.ipv4.ip_forward=0 || true\n"
+                "systemctl daemon-reload 2>/dev/null || true\n"
+                "echo 'router role removed'\n")
+
+    rules = "\n".join(
+        f"    ip saddr {net} ip daddr != {net} masquerade" for net in subnets)
+    return f"""set -e
+printf 'net.ipv4.ip_forward=1\\n' > /etc/sysctl.d/99-vmorch-router.conf
+sysctl -qw net.ipv4.ip_forward=1
+
+cat > {ROUTER_NFT} <<'NFT'
+#!/usr/sbin/nft -f
+# Written by vmorch. Masquerade for the local networks this box fronts.
+# Matched on source subnet because interface names follow PCI order.
+# Your own firewall rules belong in your own tables; this one is replaced
+# wholesale every time vmorch reconciles the box.
+delete table ip vmorch_nat
+table ip vmorch_nat {{
+  chain postrouting {{
+    type nat hook postrouting priority srcnat; policy accept;
+{rules}
+  }}
+}}
+NFT
+
+cat > {ROUTER_UNIT} <<'UNIT'
+[Unit]
+Description=vmorch router rules
+After=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# `delete table` fails when it does not exist yet, which is the normal case on
+# a cold boot, so the file is applied with -f twice: once to create, once to
+# replace. `|| true` on the first covers the cold case without hiding the second.
+ExecStart=/bin/sh -c 'nft add table ip vmorch_nat; nft -f {ROUTER_NFT}'
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now vmorch-router.service
+echo "routing for {' '.join(subnets)}"
+"""
+
+
+def configure_router(name: str, subnets: list[str]) -> str:
+    """Apply the router role to a running box over ssh."""
+    return run(name, router_script(subnets), check=bool(subnets))
+
+
+def configure_nets(name: str, attachments: list[tuple[str, str, str]],
+                   gateway: str | None = None,
+                   resolver: str | None = None) -> str:
     """Give the guest a static address on each local net it is attached to.
 
-    `attachments` is (net name, mac, address) per net.
+    `attachments` is (net name, mac, address) per net. `gateway` is a router's
+    address on one of them, if this box is meant to reach the world through
+    another box rather than through its own NAT NIC; `resolver` goes with it,
+    because a box behind a gateway has no DNS otherwise.
 
     Static rather than DHCP because a local net has no dnsmasq -- it has no host
     address at all, which is what makes it members-only. The addresses are known
@@ -216,6 +311,19 @@ def configure_nets(name: str, attachments: list[tuple[str, str, str]]) -> str:
             "      dhcp4: false",
             "      dhcp6: false",
         ]
+        # The default route goes on the first net that has one, and only for a
+        # box with no NAT NIC of its own -- two default routes would race, and
+        # the box's own internet grant must always win.
+        if gateway and gateway.rsplit(".", 1)[0] == address.rsplit(".", 1)[0]:
+            stanzas += [
+                "      routes:",
+                "        - to: default",
+                f"          via: {gateway}",
+            ]
+            if resolver:
+                stanzas += ["      nameservers:",
+                            f"        addresses: [{resolver}]"]
+            gateway = None
     body = "\n".join(stanzas)
 
     return run(name, f"""set -e

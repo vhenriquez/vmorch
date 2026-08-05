@@ -768,9 +768,11 @@ class App:
         lines = []
         for net in found:
             members = boxlib.boxes_on_net(net.name)
+            router = boxlib.router_on_net(net.name)
             lines.append(f"{net.name:<12} {net.subnet:<20} {net.bridge}")
             for box in members:
-                lines.append(f"{'':<12}   {box} — {net.address(box)}")
+                role = "  ROUTER (source pin dropped)" if box == router else ""
+                lines.append(f"{'':<12}   {box} — {net.address(box)}{role}")
             if not members:
                 lines.append(f"{'':<12}   (no boxes attached)")
             lines.append("")
@@ -837,14 +839,37 @@ class App:
         if name is None:
             return
         net = netlib.get(name)
-        note = (f"{box.name} will get {net.address(box.name)} on {name}. "
-                "The box restarts so the guest comes up with the interface "
-                "configured.")
+
+        got = ui.form(self.stdscr, f"Attach {box.name} to {name}", [
+            {"key": "router", "label": "router", "type": "bool", "value": False,
+             "help": "This box FORWARDS for the others on the net — the "
+                     "firewall role. Its own source-address pin on this net is "
+                     "dropped, because forwarding means sending packets that "
+                     "are not yours. Every other member stays pinned, and MAC "
+                     "and ARP anti-spoofing stay on even here.",
+             "risky": True},
+        ], note=f"{box.name} gets {net.address(box.name)} on {name}. The box "
+                "restarts so it comes up with the interface configured.",
+             action="attach")
+        if got is None:
+            return
+        router = bool(got["router"])
+        existing = boxlib.router_on_net(name)
+        if router and existing and existing != box.name:
+            if not ui.confirm(self.stdscr, "Second router",
+                              f"{existing} already routes for {name}. Only one "
+                              "supplies the default route. Continue?"):
+                return
+        note = (f"{box.name} will get {net.address(box.name)} on {name}."
+                + (" Forwarding and masquerade are configured for it."
+                   if router else ""))
         res = self.task("Attaching",
-                        lambda: boxlib.attach_net(box.name, name), note)
+                        lambda: boxlib.attach_net(box.name, name,
+                                                  router=router), note)
         self.refresh_boxes()
         if res is not None:
-            self.status = (f"{box.name} on {name} at {net.address(box.name)}")
+            self.status = (f"{box.name} on {name} at {net.address(box.name)}"
+                           + (" — routing for it" if router else ""))
 
     def act_netdetach(self) -> None:
         box = self.current

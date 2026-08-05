@@ -225,8 +225,8 @@ def box_filter_name(net: str, box: str) -> str:
     return f"vmorch-net-{net}-{box}"
 
 
-def box_filter_xml(net: LocalNet, box: str) -> str:
-    """Per-box filter for one local net NIC, with the address pinned.
+def box_filter_xml(net: LocalNet, box: str, router: bool = False) -> str:
+    """Per-box filter for one local net NIC.
 
     Members of a net can reach each other -- that is the point -- so the thing
     worth preventing is one member *pretending to be another*. `clean-traffic`
@@ -237,19 +237,41 @@ def box_filter_xml(net: LocalNet, box: str) -> str:
     There are no drop rules and none are needed: the segment has no gateway and
     no host address, so a packet cannot leave it whatever the guest addresses it
     to. Rules that cannot fire are rules that mislead the next reader.
+
+    **A router is the one exception, and it has to be.** Forwarding means
+    emitting packets whose source address belongs to somebody else -- a reply
+    from the internet, relayed onto the segment, carries the *remote* address,
+    not the router's. That is indistinguishable from spoofing, so the pin drops
+    it and the return path dies while the outbound half works perfectly. Measured
+    2026-08-05: with the pin, ping through a gateway box was 100% loss; with the
+    pin removed from that one box's filter, 0% loss and HTTP 301, and every other
+    member stayed pinned and still could not spoof.
+
+    Only the IP pin goes. MAC and ARP anti-spoofing stay on even for a router,
+    so it still cannot claim another box's identity on the wire.
     """
+    if router:
+        pin = ("  <!-- No IP pin: this box forwards for others, and a forwarded\n"
+               "       packet carries somebody else's source address. MAC and\n"
+               "       ARP anti-spoofing still apply. -->")
+        params = "    <parameter name='CTRL_IP_LEARNING' value='none'/>"
+    else:
+        pin = ("  <!-- Pinned, not learned: the guest never asserts its own\n"
+               "       address. -->")
+        params = (f"    <parameter name='IP' value='{net.address(box)}'/>\n"
+                  "    <parameter name='CTRL_IP_LEARNING' value='none'/>")
+
     return f"""<filter name='{box_filter_name(net.name, box)}' chain='root'>
-  <!-- Pinned, not learned: the guest never gets to assert its own address. -->
+{pin}
   <filterref filter='clean-traffic'>
-    <parameter name='IP' value='{net.address(box)}'/>
-    <parameter name='CTRL_IP_LEARNING' value='none'/>
+{params}
   </filterref>
 </filter>
 """
 
 
-def ensure_box_filter(net: LocalNet, box: str) -> str:
-    xml = box_filter_xml(net, box)
+def ensure_box_filter(net: LocalNet, box: str, router: bool = False) -> str:
+    xml = box_filter_xml(net, box, router=router)
     name = box_filter_name(net.name, box)
     try:
         existing = virsh.run("nwfilter-dumpxml", name)

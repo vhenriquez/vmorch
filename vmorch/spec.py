@@ -86,6 +86,18 @@ class BoxSpec:
     #: deliberate exception to box-to-box isolation, which is why it is a list
     #: of names you opted into rather than a boolean.
     nets: list[str] = field(default_factory=list)
+    #: Local nets this box may *forward* on -- the firewall/gateway role.
+    #:
+    #: It relaxes one control, deliberately and narrowly. Every other member of
+    #: a net has its source address pinned, so it cannot impersonate a peer. A
+    #: router cannot: forwarding means emitting packets whose source is somebody
+    #: else's, which is indistinguishable from spoofing. So the pin is dropped
+    #: for this box on these nets only, and nowhere else -- MAC and ARP
+    #: anti-spoofing stay on even here.
+    #:
+    #: Named rather than a boolean because the relaxation has to be visible in
+    #: the spec: `vm show` and `vm net ls` can then say which box holds it.
+    routes_for: list[str] = field(default_factory=list)
     folders: list[Folder] = field(default_factory=list)
     from_host: list[Service] = field(default_factory=list)
     to_host: list[Service] = field(default_factory=list)
@@ -147,6 +159,22 @@ def _parse_nets(raw: object) -> list[str]:
         if name not in out:
             out.append(name)
     return out
+
+
+def _parse_routes_for(raw: object, nets: list[str]) -> list[str]:
+    """Nets this box routes on. Must be nets it is actually attached to.
+
+    Routing on a net you are not on is meaningless, and silently accepting it
+    would leave a spec that reads as though a firewall exists when none does.
+    """
+    routers = _parse_nets(raw)
+    stray = [n for n in routers if n not in nets]
+    if stray:
+        raise SpecError(
+            f"network.routes_for names {stray} but the box is not attached to "
+            f"{'them' if len(stray) > 1 else 'it'}. Add to network.nets first."
+        )
+    return routers
 
 
 def _parse_sudo(raw: object) -> str:
@@ -234,6 +262,8 @@ def parse(data: dict, name: str | None = None) -> BoxSpec:
         internet=bool(network.get("internet", False)),
         lan=bool(network.get("lan", False)),
         nets=_parse_nets(network.get("nets", [])),
+        routes_for=_parse_routes_for(network.get("routes_for", []),
+                                     _parse_nets(network.get("nets", []))),
         folders=folders,
         from_host=[
             _parse_service(s, i, VALID_VIA_FROM_HOST, "filter")
@@ -277,6 +307,10 @@ def dump(spec: BoxSpec) -> str:
         "# nets: local networks this box shares with other boxes. Members-only",
         "# segments -- no gateway, no host, no internet. `vm net ls` lists them.",
         "nets = [" + ", ".join(f'"{n}"' for n in spec.nets) + "]",
+        "# routes_for: nets this box FORWARDS on -- the firewall role. Its own",
+        "# source-address pin is dropped on those nets, because forwarding means",
+        "# sending packets that are not yours. Every other member stays pinned.",
+        "routes_for = [" + ", ".join(f'"{n}"' for n in spec.routes_for) + "]",
         "",
     ]
 

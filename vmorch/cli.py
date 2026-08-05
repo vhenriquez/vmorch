@@ -576,12 +576,16 @@ def cmd_net_ls(args) -> None:
         print("the same one reach each other, and nothing else -- no gateway,")
         print("no host, no internet.")
         return
-    print(f"  {'NAME':<12}{'SUBNET':<20}{'BRIDGE':<16}BOXES")
+    print(f"  {'NAME':<12}{'SUBNET':<20}{'ROUTER':<12}BOXES")
     for net in found:
         attached = boxes.boxes_on_net(net.name)
-        print(f"  {net.name:<12}{net.subnet:<20}{net.bridge:<16}"
+        router = boxes.router_on_net(net.name)
+        print(f"  {net.name:<12}{net.subnet:<20}{router or '-':<12}"
               f"{', '.join(attached) or '-'}")
     print(f"\n  addresses are the box's management octet on each net"
+          "\n  ROUTER = the box that forwards for the others. It is the one"
+          "\n           member whose source address is NOT pinned, because"
+          "\n           forwarding means sending packets that are not yours."
           f"\n  definitions: {nets.NETS_FILE}")
 
 
@@ -603,7 +607,17 @@ def cmd_net_attach(args) -> None:
     net = nets.get(args.net)
     print(f"attaching {args.box} to {args.net} "
           f"({net.address(args.box)}) ...")
-    box = boxes.attach_net(args.box, args.net)
+    if args.router:
+        existing = boxes.router_on_net(args.net)
+        if existing and existing != args.box:
+            print(f"  note: {existing} already routes for {args.net}; "
+                  "only one supplies the default route")
+        print("  as ROUTER: its source-address pin on this net is dropped, "
+              "because forwarding")
+        print("  means sending packets that are not its own. MAC and ARP "
+              "anti-spoofing stay on,")
+        print("  and every other member stays pinned.")
+    box = boxes.attach_net(args.box, args.net, router=args.router)
     print(f"attached. {box.name} is {box.state}")
     if box.note:
         print(f"  {box.note}")
@@ -834,6 +848,11 @@ def build_parser() -> argparse.ArgumentParser:
     nat = netsub.add_parser("attach", help="put a box on a local network")
     nat.add_argument("box")
     nat.add_argument("net")
+    nat.add_argument("--router", action="store_true",
+                     help="this box forwards for the others on the net (the "
+                          "firewall role). Drops its own source-address pin on "
+                          "that net -- forwarding means sending packets that "
+                          "are not yours. Other members stay pinned")
     nat.set_defaults(func=cmd_net_attach)
 
     nde = netsub.add_parser("detach", help="take a box off a local network")
