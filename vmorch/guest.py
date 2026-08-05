@@ -120,6 +120,75 @@ df -h / | tail -1
 """)
 
 
+#: Where the WAN interface's config goes. Not cloud-init's own
+#: 50-cloud-init.yaml: that file belongs to cloud-init, which rewrites it
+#: wholesale on a reseed. A separate, later-sorting file merges with it instead
+#: of fighting it, and both describe the same interface identically, so a reseed
+#: afterwards is a no-op rather than a conflict.
+WAN_NETPLAN = "/etc/netplan/60-vmorch-wan.yaml"
+
+
+def configure_wan(name: str, wan_mac: str) -> str:
+    """Teach a running guest about its internet NIC.
+
+    Granting internet to an existing box adds a second NIC at the hypervisor,
+    and that is all it does. The guest's network config was written by
+    cloud-init at first boot, when there was one NIC, and cloud-init does not
+    run again -- so nothing in the guest knows the interface exists and it sits
+    there DOWN with no address while `vm apply` reports success.
+
+    Deliberately writes the file and stops. It does *not* run `netplan apply`,
+    because the caller restarts the box moments later and boot brings the
+    interface up with no risk of tearing down the management link this very
+    command is running over. Matching by MAC means the file can be written
+    before the NIC exists.
+
+    Idempotent, and left in place when internet is revoked: netplan ignores a
+    `match` that resolves to nothing, and keeping it means re-granting internet
+    later needs no in-guest step at all.
+    """
+    if not run(name, "command -v netplan >/dev/null 2>&1 && echo yes || echo no",
+               check=False).strip().endswith("yes"):
+        raise GuestError(
+            f"{name} does not use netplan, so vmorch cannot configure its "
+            "internet NIC from here. Run `vm reseed " + name + "` instead: that "
+            "regenerates the seed and lets cloud-init write whatever the "
+            "distro uses."
+        )
+
+    # 0600 to match what cloud-init writes; netplan warns loudly about a
+    # world-readable config and the warning is on every boot.
+    return run(name, f"""set -e
+cat > {WAN_NETPLAN} <<'YAML'
+# Written by vmorch when internet was granted to an existing box.
+# cloud-init only configures NICs at first boot, so this file is what makes the
+# second interface work without reseeding. Matched by MAC because interface
+# names follow PCI enumeration order.
+network:
+  version: 2
+  ethernets:
+    wan:
+      match:
+        macaddress: "{wan_mac}"
+      dhcp4: true
+      dhcp6: false
+YAML
+chmod 600 {WAN_NETPLAN}
+netplan generate
+echo "wrote {WAN_NETPLAN}"
+""")
+
+
+def has_wan_config(name: str) -> bool:
+    """True if the guest already has config for a second NIC.
+
+    Checks cloud-init's file as well as ours: a box created with internet from
+    the start was configured at first boot and needs nothing.
+    """
+    out = run(name, "cat /etc/netplan/*.yaml 2>/dev/null || true", check=False)
+    return "wan:" in out
+
+
 def mount_folder(name: str, folder: Folder) -> None:
     """Mount a shared folder now, and persist it across reboots.
 

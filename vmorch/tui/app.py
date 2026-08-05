@@ -941,9 +941,28 @@ class App:
         # now stale. Offer to reconcile rather than leaving them disagreeing.
         if ui.confirm(self.stdscr, "Apply changes",
                       f"Apply the edited spec to {box.name}?"):
-            self.task("Applying", lambda: boxlib.apply(box.name))
-            self.status = f"Applied spec for {box.name}"
+            self.do_apply(box.name)
         self.refresh_boxes()
+
+    def do_apply(self, name: str) -> None:
+        """Reconcile a box with its spec and report anything left undone.
+
+        Shared by F4 and the menu's Apply, because this is the path where the
+        internet flag gets changed and `apply` can half-succeed -- the domain
+        right, the guest not told about its new NIC. Reporting only "Applied"
+        over that is the silent success the reconcile exists to remove.
+        """
+        res = self.task(
+            "Applying", lambda: boxlib.apply(name),
+            "Reconciling the domain, the disk and the guest's network with "
+            "the spec.")
+        self.refresh_boxes()
+        if res is None:
+            return
+        self.status = f"Applied {name}"
+        if res.note:
+            ui.message(self.stdscr, f"Applied {name}", res.note)
+            self.status = f"Applied {name} — {res.note}"
 
     def _menu_choices(self, name: str) -> list[ui.Choice]:
         """One menu's entries, with box-scoped ones disabled if there is none."""
@@ -998,9 +1017,7 @@ class App:
         if choice in actions:
             actions[choice]()
         elif choice == "apply" and box:
-            self.task("Applying", lambda: boxlib.apply(box.name))
-            self.refresh_boxes()
-            self.status = f"Applied {box.name}"
+            self.do_apply(box.name)
         elif choice == "auditbox" and box:
             import io, contextlib
             from .. import cli as _cli

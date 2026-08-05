@@ -33,6 +33,11 @@ class Box:
     state: str
     ip: str
     cid: int
+    #: Something the caller should say out loud about the operation that
+    #: produced this Box -- currently only `apply`, when reconciling the guest's
+    #: network either happened or could not. Not part of the box's state, and
+    #: never set by `load`.
+    note: str = ""
 
     @property
     def name(self) -> str:
@@ -299,16 +304,42 @@ def _disk_shortfall(name: str, box_spec: BoxSpec) -> int:
     return wanted - actual
 
 
+def _needs_wan_config(name: str, box_spec: BoxSpec, running: bool) -> bool:
+    """True if the guest has to be told about an internet NIC it does not know.
+
+    Asks the guest what it is configured for rather than diffing box.toml
+    against its previous contents, so this also repairs a box already left in
+    the broken state -- desired vs actual, exactly like _disk_shortfall.
+
+    A box that cannot be asked (stopped, or not answering ssh) is reported as
+    not needing it; apply() warns separately in that case, because guessing
+    would mean either a spurious warning or a silent miss.
+    """
+    if not box_spec.internet or not running:
+        return False
+    try:
+        return not guest.has_wan_config(name)
+    except guest.GuestError:
+        return False
+
+
 def apply(name: str) -> Box:
     """Regenerate the domain from the spec and reconcile.
 
-    Deliberately does not touch cloud-init: that ran once, at first boot. Later
-    changes go through domain XML and in-guest commands.
+    Deliberately does not re-run cloud-init: that ran once, at first boot, and
+    a reseed rewrites host keys and every file cloud-init owns -- far too much
+    for a one-line spec edit. Later changes go through domain XML and narrow
+    in-guest commands instead.
 
-    The disk *is* reconciled, because the spec is the source of truth and
-    `disk = "60G"` in box.toml has to mean something. It previously did not:
-    editing the size and applying reported success and changed nothing, leaving
-    the spec quietly describing a box that did not exist.
+    Two things are reconciled *inside* the guest, because the spec is the source
+    of truth and a field in box.toml has to mean something:
+
+      disk      grown to match, partition and filesystem included
+      internet  the new NIC's netplan written, so it comes up on the restart
+
+    Both were silent no-ops once. Editing the size, or the internet flag,
+    reported success and changed nothing, leaving the spec describing a box that
+    did not exist.
     """
     box = load(name)
     # Checked before the restart below, so a spec that cannot be satisfied
@@ -330,6 +361,27 @@ def apply(name: str) -> Box:
     (box_dir(name) / "domain.xml").write_text(xml)
 
     was_running = box.state == "running"
+
+    # Before the restart, and only while the box is still up: this needs ssh,
+    # and it needs the config in place by the time the guest boots with the new
+    # NIC. Writing it costs nothing when it turns out not to be needed.
+    wan_note = ""
+    if box.spec.internet and not was_running:
+        wan_note = (
+            f"{name} is stopped, so its internet NIC could not be configured "
+            "from here. If it comes up without an address, run "
+            f"`vm reseed {name}`."
+        )
+    elif _needs_wan_config(name, box.spec, was_running):
+        try:
+            guest.configure_wan(name, allocation.wan_mac)
+            wan_note = "configured the internet NIC inside the box"
+        except guest.GuestError as exc:
+            # Not fatal: the rest of the reconcile is still worth doing, and
+            # the box keeps the management NIC either way. Say so rather than
+            # reporting a clean success over a network that will not come up.
+            wan_note = f"could not configure the internet NIC: {exc}"
+
     if was_running:
         _graceful_restart_stop(name)
 
@@ -346,7 +398,9 @@ def apply(name: str) -> Box:
     if shortfall > 0:
         resize_disk(name, box.spec.disk)
 
-    return load(name)
+    applied = load(name)
+    applied.note = wan_note
+    return applied
 
 
 def start(name: str) -> None:

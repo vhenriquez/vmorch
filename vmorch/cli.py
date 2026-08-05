@@ -299,6 +299,8 @@ def cmd_password(args) -> None:
 def cmd_apply(args) -> None:
     box = boxes.apply(args.name)
     print(f"applied. {box.name} is {box.state}")
+    if box.note:
+        print(f"  {box.note}")
 
 
 def cmd_start(args) -> None:
