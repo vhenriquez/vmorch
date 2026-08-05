@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+"""vmorch TUI entry point. See the note in `vm` about the sys.path line."""
 import sys
-from vmorch.tui import main
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from vmorch.tui import main  # noqa: E402
+
 sys.exit(main())

@@ -22,6 +22,8 @@ Three things here are load-bearing and easy to get wrong:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from . import config
 from .spec import BoxSpec
 
@@ -29,6 +31,26 @@ from .spec import BoxSpec
 #: How many virtiofs shares (and other devices) can be hot-plugged after a box
 #: is created. Each takes one PCIe root port.
 SPARE_PCI_PORTS = 12
+
+
+def _emulator_xml() -> str:
+    """<emulator> for whichever distro this is, or nothing at all.
+
+    /usr/bin/qemu-system-x86_64 is right on Debian, Ubuntu and Arch and wrong on
+    Fedora and RHEL, which ship /usr/libexec/qemu-kvm. Hardcoding it made the
+    tool refuse to define a domain on half the distros it otherwise runs on,
+    with a libvirt error about a missing binary.
+
+    Emitting nothing is the safe fallback rather than a failure: libvirt fills
+    the element in from the host's capabilities when the XML omits it. The probe
+    exists only so the element stays explicit where it can be.
+    """
+    for candidate in ("/usr/bin/qemu-system-x86_64",   # Debian, Ubuntu, Arch
+                      "/usr/libexec/qemu-kvm",         # Fedora, RHEL, CentOS
+                      "/usr/bin/qemu-kvm"):            # older Debian
+        if Path(candidate).exists():
+            return f"    <emulator>{candidate}</emulator>\n"
+    return ""
 
 
 def _cpu_xml(spec: BoxSpec) -> str:
@@ -216,8 +238,7 @@ def build(spec: BoxSpec, disk_path: str, mac: str, wan_mac: str, cid: int,
   <on_crash>destroy</on_crash>
 
   <devices>
-    <emulator>/usr/bin/qemu-system-x86_64</emulator>
-
+{_emulator_xml()}
     <!-- Spare PCIe root ports, so devices can be hot-plugged later.
          q35 only auto-provisions enough slots for the devices present at
          definition time. Without spares, attaching a second virtiofs share to

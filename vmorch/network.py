@@ -59,6 +59,22 @@ def nat_gateway() -> str:
     return match.group(1)
 
 
+def nat_bridge() -> str:
+    """The NAT network's bridge interface, read from libvirt.
+
+    virbr0 is only libvirt's usual name for it, not a guarantee: a host that
+    already had a virbr0 when the default network was defined gets virbr1, and
+    a rebuilt default network can land anywhere. The audit rules match on this
+    name, and a wrong one does not error -- it just logs nothing, which is the
+    worst way for an audit trail to fail.
+    """
+    xml = virsh.run("net-dumpxml", config.NAT_NET)
+    match = re.search(r"<bridge name='([^']+)'", xml)
+    if not match:
+        raise RuntimeError(f"no <bridge> in network {config.NAT_NET}")
+    return match.group(1)
+
+
 def _wan_filter_xml(allow_lan: bool) -> str:
     """Filter for the internet NIC.
 

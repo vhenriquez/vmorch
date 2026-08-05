@@ -107,8 +107,13 @@ BASES_DIR = _path("bases_dir", STATE_DIR / "bases")        # golden images, NVMe
 BOXES_DIR = _path("boxes_dir", STATE_DIR / "boxes")
 ALLOC_FILE = STATE_DIR / "allocations.json"
 
-DOWNLOAD_CACHE = _path("download_cache",
-                       Path("~/vmorch/cloud_images"))  # HDD, cold
+# Under the state dir by default, because a default has to work on a machine
+# that is not this one. It used to point at ~/vmorch/cloud_images,
+# which is a mount that exists on exactly one host: anywhere else the first
+# `vm new` died with a bare "PermissionError: '~/vmorch'" from the
+# mkdir, before any of the tool's own error handling. Hosts with a spinning disk
+# to spare should still send it there -- see download_cache in config.toml.
+DOWNLOAD_CACHE = _path("download_cache", STATE_DIR / "cache")
 
 # The AppArmor rule above is not advice, it is a hard constraint, so anything
 # holding a disk image is checked rather than trusted.
@@ -121,6 +126,28 @@ for _label, _dir in (("state_dir", STATE_DIR), ("bases_dir", BASES_DIR),
             "  denies virt-aa-helper any dot-directory, so boxes fail to start\n"
             f"  with a bare 'Permission denied'. Edit {CONFIG_FILE}."
         )
+
+
+def ensure_dir(path: Path, key: str) -> Path:
+    """mkdir -p, turning a bad configured path into a sentence rather than a
+    traceback.
+
+    Every one of these directories can be pointed anywhere from config.toml, so
+    "it does not exist and I may not create it" is a configuration mistake, not
+    a bug -- and the raw OSError names only the first missing parent, which is
+    rarely the part that was got wrong.
+    """
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise SystemExit(
+            f"cannot create {key} = {path}\n"
+            f"  {exc.strerror}: {getattr(exc, 'filename', path)}\n"
+            f"  Create it yourself, or point {key} somewhere writable in\n"
+            f"  {CONFIG_FILE}."
+        ) from None
+    return path
+
 
 # --- ssh ---------------------------------------------------------------------
 

@@ -1,4 +1,16 @@
 #!/usr/bin/env python3
+"""vmorch CLI entry point.
+
+The checkout is put on sys.path from here so this file works when it is
+symlinked into ~/.local/bin -- which is how anyone uses it, since there is no
+package to install. resolve() follows the symlink, so what gets added is the
+repo directory rather than the bin directory the symlink lives in.
+"""
 import sys
-from vmorch.cli import main
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from vmorch.cli import main  # noqa: E402
+
 sys.exit(main())

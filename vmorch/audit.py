@@ -204,7 +204,7 @@ def available() -> dict[str, bool]:
 # Tier 2: the nftables ruleset. Needs root once; everything above does not.
 # --------------------------------------------------------------------------
 
-def nft_ruleset(nat_gw: str | None = None) -> str:
+def nft_ruleset(nat_gw: str | None = None, nat_br: str | None = None) -> str:
     """Logging rules for the box bridges.
 
     A separate table at a priority ahead of libvirt's own, doing nothing but
@@ -217,9 +217,14 @@ def nft_ruleset(nat_gw: str | None = None) -> str:
     # DNS for an internet-enabled box goes to the NAT network's resolver, not
     # the management one. Naming the wrong gateway here would log every
     # legitimate lookup as blocked -- noise that trains you to ignore the log.
-    if nat_gw is None:
+    #
+    # The bridge name is discovered for the same reason. "virbr0" is libvirt's
+    # usual name for the default network's bridge, not a promise -- and a wrong
+    # interface name in an nft rule does not fail, it silently matches nothing.
+    if nat_gw is None or nat_br is None:
         from . import network
-        nat_gw = network.nat_gateway()
+        nat_gw = nat_gw or network.nat_gateway()
+        nat_br = nat_br or network.nat_bridge()
 
     return f"""#!/usr/sbin/nft -f
 # vmorch connection audit. Observes only: every rule ends in `return`, so
@@ -235,18 +240,18 @@ table inet vmorch_audit {{
         # New flows leaving a box, on either bridge.
         iifname "{config.MGMT_BRIDGE}" ct state new \\
             log prefix "{LOG_PREFIX}-allow " level info
-        iifname "virbr0" ct state new \\
+        iifname "{nat_br}" ct state new \\
             log prefix "{LOG_PREFIX}-allow " level info
 
         # What the guest is forbidden to reach. These duplicate the nwfilter
         # decisions purely so the attempt is recorded -- in a default-deny
         # design the refused attempts are the interesting ones.
-        iifname "virbr0" ct state new \\
+        iifname "{nat_br}" ct state new \\
             ip daddr {{ 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 }} \\
             log prefix "{LOG_PREFIX}-blocked-private " level info
-        iifname "virbr0" udp dport 53 ip daddr != {nat_gw} \\
+        iifname "{nat_br}" udp dport 53 ip daddr != {nat_gw} \\
             log prefix "{LOG_PREFIX}-blocked-dns " level info
-        iifname "virbr0" tcp dport 853 \\
+        iifname "{nat_br}" tcp dport 853 \\
             log prefix "{LOG_PREFIX}-blocked-dot " level info
     }}
 
