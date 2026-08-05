@@ -277,6 +277,10 @@ def create(box_spec: BoxSpec, start: bool = True) -> Box:
     _regenerate_ssh()
 
     if start:
+        # Immediately before the start, every time: see network.arm_filters.
+        # ensure_base() above is too early -- the image copy, the overlay and
+        # the seed build all happen in between.
+        network.arm_filters()
         virsh.run("start", box_spec.domain)
 
     return load(box_spec.name)
@@ -391,6 +395,7 @@ def apply(name: str) -> Box:
     if was_running:
         _ensure_console_log(name)
         _ensure_disk_perms(name)
+        network.arm_filters()
         virsh.run("start", box.spec.domain)
 
     # After the restart, so a box that was running grows its filesystem online
@@ -408,6 +413,7 @@ def start(name: str) -> None:
     _ensure_console_log(name)
     _ensure_disk_perms(name)
     if box.state != "running":
+        network.arm_filters()
         virsh.run("start", box.spec.domain)
 
 
@@ -543,6 +549,7 @@ def reseed(name: str) -> Box:
         _graceful_restart_stop(name)
     _ensure_console_log(name)
     _ensure_disk_perms(name)
+    network.arm_filters()
     virsh.run("start", box.spec.domain)
     return load(name)
 

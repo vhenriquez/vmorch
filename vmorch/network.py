@@ -266,6 +266,37 @@ def ensure_filters() -> None:
     _define_filter(_wan_filter_xml(allow_lan=False))
 
 
+def arm_filters() -> None:
+    """Define the filters immediately before a domain starts.
+
+    **Load-bearing. Without this a box is not filtered when it boots.**
+
+    Measured 2026-08-05: a box started without a filter definition just before
+    it reached the LAN router and the host's LAN address with 0% loss, despite
+    `lan = false` -- for as long as it was left alone, over two minutes. The
+    filter was defined, correct, and bound to the port the whole time
+    (`nwfilter-binding-list` showed it 1.4s after create returned); libvirt had
+    simply not put the rules in place. Redefining the filter *before* the start
+    fixes it: sampled from t+8s onwards, every start is filtered.
+
+    Four variants were tested to find the cause -- as shipped, without
+    `clean-traffic`, and with `CTRL_IP_LEARNING` pinned to `none` and to `dhcp`.
+    All four behaved identically, which rules out the IP-learning theory: what
+    matters is only that a define happens between the previous state and the
+    start.
+
+    So this is called from every path that starts a domain, and called *before*
+    `virsh start`, not after. Calling it after was tried first and does nothing
+    -- by then the unfiltered port already exists.
+
+    `create()` alone was not enough even though it calls ensure_filters(): that
+    happens near the top, before the image copy, the overlay and the seed build,
+    and whatever libvirt needs is evidently not still in place by the time the
+    domain actually starts.
+    """
+    ensure_filters()
+
+
 def reserve_address(name: str, mac: str, ip: str) -> None:
     """Pin a box's IP by MAC, so the name->IP mapping survives rebuilds."""
     host_xml = f"<host mac='{mac}' name='{name}' ip='{ip}'/>"
