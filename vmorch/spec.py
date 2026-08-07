@@ -27,8 +27,16 @@ VALID_SUDO = {"nopasswd", "password", "none"}
 VALID_VIA_FROM_HOST = {"filter", "ssh", "vsock"}
 VALID_VIA_TO_HOST = {"direct", "ssh"}
 
-# Sharing any of these hands over the host outright: they hold the credentials,
-# the code the host executes, or the configuration that decides what it trusts.
+# Sharing any of these -- or anything inside them -- hands over the host
+# outright: they hold the credentials, the code the host executes, or the
+# configuration that decides what it trusts.
+#
+# The check is an ANCESTOR test, not equality. It used to compare the resolved
+# path against each entry exactly, which blocked $HOME and / while leaving
+# /home, /usr, /boot and /etc/ssh all shareable rw -- and /home contains $HOME,
+# while /usr and /boot are where the host's own code lives. A rooted agent
+# writing into any of them is the realistic path back out of the box, which is
+# the whole reason this list exists.
 FORBIDDEN_FOLDERS = [
     (Path.home(), "the home directory itself"),
     (Path.home() / ".ssh", "SSH keys"),
@@ -36,7 +44,31 @@ FORBIDDEN_FOLDERS = [
     (Path.home() / ".aws", "cloud credentials"),
     (Path("/"), "the host root"),
     (Path("/etc"), "host system configuration"),
+    (Path("/boot"), "the host's kernel and bootloader"),
+    (Path("/usr"), "host system binaries and libraries"),
+    (Path("/bin"), "host system binaries"),
+    (Path("/sbin"), "host system binaries"),
+    (Path("/lib"), "host system libraries"),
+    (Path("/var"), "host system state"),
+    (Path("/opt"), "host add-on software"),
+    (Path("/srv"), "host service data"),
+    (Path("/root"), "the root account's home"),
+    (Path("/home"), "every user's home directory"),
+    (Path("/dev"), "host devices"),
+    (Path("/proc"), "host process state"),
+    (Path("/sys"), "host kernel interfaces"),
 ]
+
+#: Entries that are ancestors of ordinary working directories. Sharing one of
+#: THESE exactly is still refused, but a directory inside is fine.
+#:
+#: The line is between the host's *code and credentials* and its *data*.
+#: ~/code, /srv/data and /var/www are reasonable things to grant; nothing below
+#: /usr, /boot, /etc or /proc ever is, because that is where the host keeps what
+#: it executes and what it trusts. $HOME is here so `vm share box ~/code` works
+#: -- the dotfile directories below it are separate entries and stay refused.
+_SHARE_INSIDE_OK = {Path("/"), Path("/home"), Path.home(),
+                    Path("/srv"), Path("/opt"), Path("/var")}
 
 
 class SpecError(ValueError):
@@ -242,10 +274,19 @@ def _parse_folder(raw: dict, index: int) -> Folder:
 
     resolved = host.resolve()
     for forbidden, why in FORBIDDEN_FOLDERS:
-        if resolved == forbidden.resolve():
+        try:
+            root = forbidden.resolve()
+        except OSError:                                   # noqa: PERF203
+            continue
+        if resolved == root:
             raise SpecError(
                 f"folder {tag!r}: refusing to share {resolved} ({why}). "
                 "Share a narrower directory instead."
+            )
+        if root not in _SHARE_INSIDE_OK and resolved.is_relative_to(root):
+            raise SpecError(
+                f"folder {tag!r}: refusing to share {resolved}, which is inside "
+                f"{root} ({why}). Share a directory outside it instead."
             )
 
     return Folder(host=resolved, tag=tag, mode=_parse_mode(raw.get("mode"), tag))

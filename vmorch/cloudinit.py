@@ -157,6 +157,13 @@ def user_data(spec: BoxSpec, router_subnets: list[str] | None = None) -> str:
         # merely additive and the old NOPASSWD entry still wins.
         "  - [rm, -f, /etc/sudoers.d/90-cloud-init-users]",
     ]
+    # Mountpoints, created before the mounts module runs. These belong in
+    # runcmd and used to be appended after the `mounts:` block instead -- where
+    # a blank line does not end a YAML sequence, so they became three more
+    # entries in `mounts:` and cloud-init read ["mkdir", "-p", "/mnt/tag"] as an
+    # fstab line whose device was "mkdir".
+    for f in spec.folders:
+        runcmds.append(f"  - [mkdir, -p, /mnt/{f.tag}]")
     if router_subnets:
         # A box created as a router has to come up routing. Wiring this into
         # `apply` alone shipped once and left ip_forward = 0 on a brand-new
@@ -177,6 +184,10 @@ def user_data(spec: BoxSpec, router_subnets: list[str] | None = None) -> str:
         # Mount ro for read-only shares as well as marking <readonly/> in the
         # domain XML. Two layers must fail before an agent can write to a host
         # folder it was not granted.
+        #
+        # Nothing may be appended after this block: it is a YAML sequence, and a
+        # blank line does not close one. Anything that follows becomes another
+        # mount entry.
         lines.append("mounts:")
         for f in spec.folders:
             opts = "ro" if f.readonly else "rw"
@@ -184,11 +195,6 @@ def user_data(spec: BoxSpec, router_subnets: list[str] | None = None) -> str:
                 f"  - [{f.tag}, /mnt/{f.tag}, virtiofs, "
                 f'"defaults,{opts},nofail", "0", "0"]'
             )
-        lines.append("")
-
-        for f in spec.folders:
-            lines.append(f"  - [mkdir, -p, /mnt/{f.tag}]")
-        lines.append("  - [mount, -a]")
         lines.append("")
 
     return "\n".join(lines)
