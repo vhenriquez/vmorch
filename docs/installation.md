@@ -105,12 +105,11 @@ Every path is configurable:
 vmorch config --write     # writes a commented starter config
 ```
 
-**One constraint is not negotiable.** Nothing holding a disk image may live in a
-hidden directory under `$HOME`. Ubuntu's AppArmor profile for `virt-aa-helper`
-denies any dot-directory outright, so it cannot read the disk, cannot generate
-qemu's profile, and the box fails to start with a bare "Permission denied" that
-looks like a file-mode problem and is not. vmorch refuses such a path at startup
-rather than letting you find out later.
+**One constraint on those paths:** none of the directories holding disk images
+may be hidden, or sit inside a hidden directory. On Ubuntu, AppArmor denies
+libvirt access to dot-directories under `$HOME`, and a box stored in one fails
+to start. vmorch refuses such a path at startup and tells you which setting to
+change.
 
 ## Upgrading
 

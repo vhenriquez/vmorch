@@ -1407,23 +1407,22 @@ THE MENU (F9)
   Entries that act on a box go dim when no box is selected, instead of
   being pickable and doing nothing.
 
-THINGS WORTH KNOWING
+WORTH KNOWING
 
-  Read-only is the default for shared folders, and it holds even against
-  root inside the box: <readonly/> is enforced host-side by virtiofsd, so
-  remounting rw in the guest still cannot write. A writable share is the
-  one realistic path back to the host, which is why it is confirmed
-  separately and shown in yellow.
+  Shared folders are read-only by default, and read-only holds even
+  against root inside the box. Remounting the share writable in the guest
+  still cannot write to it. A writable share is a real grant, so it is
+  confirmed separately and shown in yellow.
 
-  Snapshots do NOT cover shared folders. virtiofs mounts are the live host
-  filesystem, so rolling a box back does not undo anything the agent wrote
-  into a writable share.
+  Snapshots do NOT cover shared folders. A shared folder is the live host
+  filesystem, not part of the box's disk, so rolling back does not undo
+  anything written into a writable share.
 
-  Isolated boxes still reach granted host services. A box with no internet
-  can use the host's Ollama for GPU work.
+  Network grants and service grants are independent. A box with no
+  internet at all can still reach a host service you shared with it.
 
-  Addresses and vsock CIDs are never reused. Destroying a box tombstones
-  its identifiers so a stale relay can never be handed a different box.
+  A box keeps its address for as long as it exists, so `ssh <name>` and
+  the entry in your ssh config stay correct across rebuilds.
 """
 
 

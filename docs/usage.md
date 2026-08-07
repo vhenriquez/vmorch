@@ -51,8 +51,7 @@ To see what an existing box actually has:
 vmorch show agent-alpha
 ```
 
-Writable shares and service grants are called out loudly there. An unnoticed
-grant is worse than an inconvenient one.
+Writable shares and service grants are highlighted.
 
 ### Share a folder
 
@@ -88,9 +87,9 @@ vmorch new scanner --internet --lan    # ...and the local network
 private address space** on it, so it can reach the internet but not your router,
 your NAS, or another machine on your desk. `--lan` removes that drop.
 
-This split is the point. Plain NAT reaches the LAN by definition; if you want a
-box that can fetch from PyPI but cannot touch your network, that is `--internet`
-alone.
+The split matters because ordinary NAT reaches your LAN as well as the
+internet. If you want a box that can install packages but cannot touch your
+network, that is `--internet` on its own.
 
 An isolated box (neither flag) has no resolver at all, which also closes DNS as
 a covert channel.
@@ -108,12 +107,12 @@ vmorch also sets up an in-guest relay so the service appears on the box's own
 `127.0.0.1:11434` — tooling overwhelmingly assumes loopback, and nothing inside
 the box needs `OLLAMA_HOST` set.
 
-This is how a box gets GPU compute without the GPU: **an isolated box with no
-internet at all can still do inference**, through the host's Ollama.
+A service grant works regardless of the box's network grants: a box with no
+internet at all can still reach a service you shared with it.
 
-Read the note in [SECURITY.md](../SECURITY.md) about what a service grant costs
-— the service's own authentication is the only control behind the hole, and
-Ollama has none.
+Note what a service grant costs. Behind the hole, the service's own
+authentication is the only remaining control — and some services, Ollama
+included, have none. See [SECURITY.md](../SECURITY.md).
 
 ```bash
 vmorch revoke agent-alpha ollama
@@ -137,10 +136,10 @@ crash-consistent image at best.
 overlay first, and that rollback point is *gone*, not archived. `vmorch
 snapshots <box>` lists what you have.
 
-**Snapshots do not cover shared folders.** virtiofs mounts are the live host
-filesystem, so rolling back does not undo anything the agent wrote into an `rw`
-share. This inverts the intuition snapshots create, so the tool says it out loud
-every time.
+**Snapshots do not cover shared folders.** A shared folder is the live host
+filesystem, not part of the box's disk, so rolling back does not undo anything
+the agent wrote into a writable share. The tool reminds you of this every time
+you take one.
 
 ### Change a box after the fact
 
@@ -154,10 +153,9 @@ This regenerates the domain from the spec and reconciles what it can in place �
 folder modes, the guest's network configuration, disk size — restarting only if
 something needs it. It reports what it did.
 
-`vmorch apply` deliberately does **not** re-run cloud-init. That ran once, at
-first boot. If a box's SSH has broken badly enough that you need first-boot
-configuration again, that is `vmorch reseed <box>`, which is a bigger hammer: it
-regenerates host keys and every file cloud-init owns.
+`vmorch apply` does not re-run first-boot configuration. If a box's SSH has
+broken badly enough that you need that, use `vmorch reseed <box>` instead — a
+bigger hammer, which regenerates host keys and every file cloud-init owns.
 
 ### Grow a disk
 
@@ -236,11 +234,9 @@ One member can be the **router**, forwarding for the rest:
 vmorch net attach firewall lab --router
 ```
 
-That box's source-address pin is dropped on that net — forwarding means sending
-packets that are not yours — while every other member stays pinned. Note the
-consequence: **a box behind a router reaches the internet regardless of its own
-`--internet` grant.** That is the point of the role, and it is the least obvious
-thing in this document.
+Note the consequence: **a box behind a router reaches whatever the router can
+reach, regardless of its own `--internet` grant.** That is what the role is for,
+and it is easy to overlook.
 
 ## The TUI
 
@@ -257,8 +253,7 @@ one folder or service under the cursor. `Enter` on a box opens a real SSH
 session; `Enter` on a snapshot rolls back to it.
 
 Everything the CLI does is reachable here, and every option carries a
-description saying what it does. That is enforced by a test, not by good
-intentions.
+description of what it does.
 
 ## Command reference
 
