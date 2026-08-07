@@ -239,6 +239,7 @@ def create(box_spec: BoxSpec, start: bool = True) -> Box:
     if virsh.domain_exists(box_spec.domain):
         raise BoxError(f"libvirt already has a domain named {box_spec.domain!r}")
 
+    config.ensure_state_dirs()
     network.ensure_base()
     hostaccess.ensure()
 

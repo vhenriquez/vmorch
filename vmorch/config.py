@@ -96,10 +96,15 @@ CID_FIRST = 100
 
 # --- storage -----------------------------------------------------------------
 #
-# ~/vmorch is a 7200rpm HDD; root is NVMe. qcow2 backing chains read
-# unmodified blocks from the base on every access, so bases and overlays must
-# live on NVMe or every box is slow for its whole life. Only the cold download
-# archive goes on spinning disk.
+# Everything lives under one visible directory in $HOME by default, so a fresh
+# clone works with no configuration at all. Each path can be pointed elsewhere
+# from config.toml.
+#
+# **Put bases and boxes on your fastest disk.** A qcow2 backing chain reads
+# unmodified blocks from the base on every access, so a base on a spinning disk
+# makes every box built from it slow for its whole life. The download cache is
+# the opposite: cold, written once, read only when a base is rebuilt -- that is
+# the one worth sending to a slow spare drive if you have one.
 
 # NOT under ~/.local, and not anywhere hidden. Ubuntu's AppArmor profile for
 # virt-aa-helper carries:
@@ -117,13 +122,13 @@ BASES_DIR = _path("bases_dir", STATE_DIR / "bases")        # golden images, NVMe
 BOXES_DIR = _path("boxes_dir", STATE_DIR / "boxes")
 ALLOC_FILE = STATE_DIR / "allocations.json"
 
+# Verified downloads, kept so rebuilding a base needs no network.
+#
 # Under the state dir by default, because a default has to work on a machine
-# that is not this one. It used to point at ~/vmorch/cloud_images,
-# which is a mount that exists on exactly one host: anywhere else the first
-# `vm new` died with a bare "PermissionError: '~/vmorch'" from the
-# mkdir, before any of the tool's own error handling. Hosts with a spinning disk
-# to spare should still send it there -- see download_cache in config.toml.
-DOWNLOAD_CACHE = _path("download_cache", STATE_DIR / "cache")
+# that is not the author's. This once pointed at a mount that existed on exactly
+# one host, and anywhere else the first `vm new` died with a bare PermissionError
+# from the mkdir, before any of the tool's own error handling ran.
+DOWNLOAD_CACHE = _path("download_cache", STATE_DIR / "cloud_images")
 
 # The AppArmor rule above is not advice, it is a hard constraint, so anything
 # holding a disk image is checked rather than trusted.
@@ -157,6 +162,36 @@ def ensure_dir(path: Path, key: str) -> Path:
             f"  {CONFIG_FILE}."
         ) from None
     return path
+
+
+#: Every directory the tool needs to exist before it can do anything.
+#: Keyed by its config.toml name so a failure names the key you would edit.
+STATE_DIRS = {
+    "state_dir": STATE_DIR,
+    "bases_dir": BASES_DIR,
+    "boxes_dir": BOXES_DIR,
+    "download_cache": DOWNLOAD_CACHE,
+}
+
+
+def ensure_state_dirs() -> list[Path]:
+    """Create every state directory that does not exist yet.
+
+    Called before any operation that writes, so a fresh clone -- or a
+    config.toml pointing somewhere new -- works without the user first having to
+    guess which directories to mkdir. Returns the ones that had to be created,
+    so the caller can say so rather than doing it silently.
+
+    Creation is not the same as being usable: ensure_dir turns a path we may not
+    write into one clear sentence naming the key to edit, instead of an OSError
+    whose filename is the first missing parent rather than the part got wrong.
+    """
+    created = []
+    for key, path in STATE_DIRS.items():
+        if not path.exists():
+            created.append(path)
+        ensure_dir(path, key)
+    return created
 
 
 # --- ssh ---------------------------------------------------------------------

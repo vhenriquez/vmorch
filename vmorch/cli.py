@@ -32,7 +32,7 @@ EXAMPLE_CONFIG = """\
 # so this is the one directory that belongs on a slow disk if you have one.
 # Defaults under state_dir; point it at a spare drive to keep several hundred
 # megabytes per image off your root filesystem.
-# download_cache = "~/vmorch/cache"
+# download_cache = "~/vmorch/cloud_images"
 
 # --- defaults for `vm new` ---------------------------------------------------
 # default_image  = "ubuntu-24.04"
@@ -476,7 +476,12 @@ def _free(path) -> str:
 
 
 def cmd_config(args) -> None:
-    import shutil as _sh
+    created = config.ensure_state_dirs()
+    if created:
+        print("created:")
+        for path in created:
+            print(f"  {path}")
+        print()
     print(f"config file   {config.CONFIG_FILE}"
           f"{'' if config.CONFIG_FILE.exists() else '   (not present; using defaults)'}")
     print()

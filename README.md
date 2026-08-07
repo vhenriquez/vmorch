@@ -114,8 +114,11 @@ vmorch/guest.py       the reconfigure path, over SSH
 vmorch/boxes.py       lifecycle
 ```
 
-State lives in `~/vmorch/` (**not** `~/.local/share` — see below). Downloaded
-images are cached on `~/vmorch/cloud_images/`.
+All state lives under `~/vmorch/` (**not** `~/.local/share` — see below):
+`bases/` for golden images, `boxes/` per box, `cloud_images/` for verified
+downloads. Every one is created on demand and can be moved from
+`~/.config/vmorch/config.toml`; `vm config` shows where they are and creates any
+that are missing.
 
 ## Things this cost time to learn
 

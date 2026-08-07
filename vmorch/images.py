@@ -4,13 +4,16 @@ The whole premise of this project is that you never sit through an OS installer:
 distro cloud images boot to a ready system, and cloud-init does the per-box
 setup on first boot.
 
-Storage split, forced by the hardware (see docs/host-capability-check.md):
+Two directories, with opposite access patterns:
 
-  ~/vmorch/cloud_images/   pristine downloads. HDD, cold, written
-                                         once, kept so a rebuild needs no network
-  ~/vmorch/bases/                        golden images. NVMe, because qcow2
-                                         backing chains read the base on every
-                                         access to an unmodified block
+  ~/vmorch/cloud_images/   pristine downloads. Cold: written once, read only
+                           when a base is rebuilt. Kept so a rebuild needs no
+                           network. Fine on a slow disk.
+  ~/vmorch/bases/          golden images. Hot: a qcow2 backing chain reads the
+                           base on every access to an unmodified block, so this
+                           belongs on your fastest disk.
+
+Both are created on demand; both can be moved from config.toml.
 
 Nothing is ever used before its checksum matches the distro's published sums
 file.
