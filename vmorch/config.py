@@ -1,8 +1,9 @@
-"""Paths, constants and host-specific facts.
+"""Paths, constants and defaults.
 
-Values here were established by the host capability check (2026-07-31); see
-docs/host-capability-check.md
-for why each one is what it is.
+Every value here can be overridden from ~/.config/vmorch/config.toml. The ones
+that are not merely taste carry a comment saying what breaks if you change them
+carelessly -- the AppArmor constraint on STATE_DIR especially, which is not
+advice but a hard limit.
 """
 
 import os

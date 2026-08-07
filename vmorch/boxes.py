@@ -880,7 +880,8 @@ def grant_service(name: str, svc_name: str, host_port: int, guest_port: int,
     if via != "filter":
         raise BoxError(
             f"via={via!r} is designed but not implemented yet; use via=filter. "
-            "See docs/agent-sandbox-use-case.md for what ssh and vsock would do."
+            "See the module docstring in vmorch/services.py for what ssh and "
+            "vsock would do."
         )
 
     entry = {"name": svc_name, "host": host_port, "guest": guest_port, "via": via}

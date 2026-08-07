@@ -6,23 +6,12 @@ An agent gets **root inside the box**. The **host is exposed only by explicit
 grant** — named folders (read-only by default), specific host services, and the
 public internet. Nothing else.
 
-Design notes live alongside this repo at
-the design notes.
-
 ## Two front ends
 
 `./vmtui` is a Norton Commander style control panel — two panels, Tab between
 them, function keys along the bottom. Everything the CLI does is reachable from
-it, and F9 lists every action with its shortcut.
-
-```
-╔════════ Boxes (2) ════════╗ ┌──────── Box: agent-test ────────┐
-║ Name        State   Addr  ║ │ ● running                       │
-║ ● agent-net running .11   ║ │ Folders (1)                     │
-║ ● agent-tes running .10   ║ │   [ro] notes   /srv/notes│
-╚═══════════════════════════╝ └─────────────────────────────────┘
-1Help 2Snap 3View 4Edit 5Share 6Srvc 7New 8Del 9Menu 10Quit
-```
+it, and F9 lists every action with its shortcut. Left panel = boxes, right panel
+= the selected box's grants.
 
 Colours come from the fixed 16-255 region of the xterm-256 palette, not the
 8-colour names. Colours 0-15 are remapped by the terminal theme, and on a light
@@ -30,10 +19,9 @@ theme "white on blue" lands around 1.5:1 — unreadable. Every pair is now
 measured: `python3 tests/test_contrast.py` prints the WCAG ratio for each, and
 all of them clear AAA (7:1), the lowest being dim text at 8.5:1.
 
-Left panel = boxes, right panel = that box's grants. F8 is contextual: on the
-left it destroys a box, on the right it revokes the one folder or service under
-the cursor. Enter on a box opens a real ssh session; Enter on a snapshot rolls
-back to it.
+F8 is contextual: on the left it destroys a box, on the right it revokes the one
+folder or service under the cursor. Enter on a box opens a real ssh session;
+Enter on a snapshot rolls back to it.
 
 ## Quick start
 

@@ -26,8 +26,8 @@ VALID_SUDO = {"nopasswd", "password", "none"}
 VALID_VIA_FROM_HOST = {"filter", "ssh", "vsock"}
 VALID_VIA_TO_HOST = {"direct", "ssh"}
 
-# Sharing any of these hands over the host outright. See the threat model in
-# docs/agent-sandbox-use-case.md.
+# Sharing any of these hands over the host outright: they hold the credentials,
+# the code the host executes, or the configuration that decides what it trusts.
 FORBIDDEN_FOLDERS = [
     (Path.home(), "the home directory itself"),
     (Path.home() / ".ssh", "SSH keys"),
