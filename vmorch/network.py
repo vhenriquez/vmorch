@@ -229,12 +229,109 @@ MGMT_FILTER_XML = f"""<filter name='vmorch-mgmt-filter' chain='root'>
 """
 
 
+class NetworkMismatch(RuntimeError):
+    """The live management network does not match the configured subnet."""
+
+
+def _live_mgmt() -> tuple[str, str] | None:
+    """(subnet in CIDR, gateway) the management network actually serves.
+
+    libvirt stores the *gateway* address and a dotted netmask; the config wants
+    a CIDR network. Reporting the raw pair back to the user produced advice like
+    `mgmt_subnet = "192.168.150.1/255.255.255.0"`, which is neither.
+    """
+    import ipaddress
+    try:
+        xml = virsh.run("net-dumpxml", config.MGMT_NET)
+    except virsh.VirshError:
+        return None
+    ip = re.search(r"<ip address='([^']+)' netmask='([^']+)'", xml)
+    if not ip:
+        return None
+    gateway, netmask = ip.group(1), ip.group(2)
+    try:
+        net = ipaddress.IPv4Network(f"{gateway}/{netmask}", strict=False)
+    except ValueError:
+        return None
+    return str(net), gateway
+
+
+def _live_mgmt_subnet() -> str | None:
+    live = _live_mgmt()
+    return live[0] if live else None
+
+
+def check_mgmt_subnet() -> None:
+    """Refuse to work against a network serving a different subnet.
+
+    `mgmt_subnet` is only read when the network is *created*. Change it
+    afterwards and this function is the only thing standing between you and a
+    box that is allocated an address nothing on the wire will ever hand out.
+
+    Nothing else notices. libvirt accepts a `<host ip=...>` reservation outside
+    its own DHCP range **without an error**, dnsmasq then ignores it, and the
+    guest takes a random in-range lease instead. So `vmorch new` reports an
+    address, writes it into the ssh config, and the box is up and reachable at a
+    completely different one -- `ssh <box>` times out with nothing anywhere
+    saying why. Observed exactly that: a box reported at 10.150.0.50 was actually
+    living on 192.168.150.134.
+
+    Deliberately refuses rather than redefining. Every existing box holds an
+    address on the old subnet, in the allocation ledger and in the ssh config;
+    silently moving the network would strand all of them at once.
+    """
+    live = _live_mgmt()
+    if live is None or live[0] == config.MGMT_SUBNET:
+        return
+    subnet, gateway = live
+
+    raise NetworkMismatch(
+        f"the {config.MGMT_NET} network is serving {subnet}, but mgmt_subnet is "
+        f"{config.MGMT_SUBNET}.\n"
+        "\n"
+        "  A subnet is only read when the network is first created, so changing\n"
+        "  it later leaves the live network where it was. Boxes would be given\n"
+        "  addresses on the new subnet that dnsmasq never hands out -- they come\n"
+        "  up on a random old-subnet lease instead and `ssh <box>` times out.\n"
+        "\n"
+        "  Keep what you have (nothing is disturbed):\n"
+        f"    mgmt_subnet  = \"{subnet}\"\n"
+        f"    mgmt_gateway = \"{gateway}\"\n"
+        f"  in {config.CONFIG_FILE}\n"
+        "\n"
+        f"  Or move to {config.MGMT_SUBNET}, which reallocates and restarts\n"
+        "  every box:\n"
+        "    vmorch net --migrate"
+    )
+
+
+def migrate_mgmt_network() -> str:
+    """Move the management network to the configured subnet.
+
+    Destructive by nature: every box's address changes, so every box has to be
+    reallocated, its ssh entry rewritten and its host key forgotten. The caller
+    is responsible for stopping boxes first and starting them afterwards -- this
+    only moves the network and clears the reservations that belonged to the old
+    one.
+    """
+    live = _live_mgmt_subnet()
+    virsh.run("net-destroy", config.MGMT_NET, check=False)
+    virsh.run("net-undefine", config.MGMT_NET, check=False)
+    virsh.define_network(MGMT_NET_XML)
+    virsh.run("net-autostart", config.MGMT_NET, check=False)
+    virsh.run("net-start", config.MGMT_NET, check=False)
+    return f"{live or 'unknown'} -> {config.MGMT_SUBNET}"
+
+
 def ensure_mgmt_network() -> bool:
     """Define and start the management network. Returns True if created."""
     created = False
     if not virsh.network_exists(config.MGMT_NET):
         virsh.define_network(MGMT_NET_XML)
         created = True
+    else:
+        # Before anything is allocated or started against it.
+        check_mgmt_subnet()
 
     state = virsh.run("net-info", config.MGMT_NET)
     if "Active:         no" in state:

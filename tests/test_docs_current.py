@@ -19,12 +19,25 @@ Run: python3 tests/test_docs_current.py
 
 from __future__ import annotations
 
+import os
 import pathlib
 import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+
+# Read the *defaults*, not whatever this machine happens to be configured with.
+# Set before vmorch.config is imported, because that module loads the file at
+# import time.
+#
+# The docs describe the defaults, so checking them against an overridden config
+# asks the wrong question. With `download_cache` pointed elsewhere this failed
+# with "'cloud-images' appears in no doc file": green on CI, red on the author's
+# laptop, for a difference that is nobody's bug. The same trap as the earlier
+# version of this test that pointed at one machine's directory, in a smaller
+# disguise.
+os.environ["VMORCH_CONFIG"] = str(ROOT / "tests" / "no-such-config.toml")
 
 #: Every markdown file that ships. Docs are plural on purpose: a flag explained
 #: in CONTRIBUTING or SECURITY counts as documented.

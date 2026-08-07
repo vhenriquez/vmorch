@@ -875,8 +875,8 @@ def main(argv: list[str] | None = None) -> int:
         args.func(args)
     except (alloc.AllocationError, boxes.BoxError, golden.GoldenError,
             guest.GuestError, images.ImageError, nets.NetError,
-            sizes.SizeError, spec_mod.SpecError, snapshots.SnapshotError,
-            virsh.VirshError) as exc:
+            network.NetworkMismatch, sizes.SizeError, spec_mod.SpecError,
+            snapshots.SnapshotError, virsh.VirshError) as exc:
         # Every error the tool raises deliberately belongs here. Three were
         # missing, so running out of addresses, losing ssh to a box, or
         # mistyping a size printed a traceback in a tool that otherwise turns
