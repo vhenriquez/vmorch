@@ -130,8 +130,13 @@ mgmt_subnet  = "192.168.150.0/24"
 mgmt_gateway = "192.168.150.1"
 ```
 
-or destroy and recreate the boxes. Changing the management subnet with boxes
-already on the old one strands them.
+or destroy and recreate the boxes.
+
+vmorch checks this for you: if the live network is serving a different subnet
+from the one configured, it **refuses to create or start anything** and prints
+both values with the two ways out. It does not move the network on its own —
+every existing box holds an address on the old subnet in the allocation ledger
+and in your ssh config, so a silent move would strand all of them at once.
 
 ## Uninstalling
 

@@ -299,28 +299,12 @@ def check_mgmt_subnet() -> None:
         f"    mgmt_gateway = \"{gateway}\"\n"
         f"  in {config.CONFIG_FILE}\n"
         "\n"
-        f"  Or move to {config.MGMT_SUBNET}, which reallocates and restarts\n"
-        "  every box:\n"
-        "    vmorch net --migrate"
+        f"  Or move to {config.MGMT_SUBNET}, which means starting over on the\n"
+        "  address plan -- destroy every box first, then:\n"
+        f"    virsh -c {config.LIBVIRT_URI} net-destroy {config.MGMT_NET}\n"
+        f"    virsh -c {config.LIBVIRT_URI} net-undefine {config.MGMT_NET}\n"
+        "    vmorch net"
     )
-
-
-def migrate_mgmt_network() -> str:
-    """Move the management network to the configured subnet.
-
-    Destructive by nature: every box's address changes, so every box has to be
-    reallocated, its ssh entry rewritten and its host key forgotten. The caller
-    is responsible for stopping boxes first and starting them afterwards -- this
-    only moves the network and clears the reservations that belonged to the old
-    one.
-    """
-    live = _live_mgmt_subnet()
-    virsh.run("net-destroy", config.MGMT_NET, check=False)
-    virsh.run("net-undefine", config.MGMT_NET, check=False)
-    virsh.define_network(MGMT_NET_XML)
-    virsh.run("net-autostart", config.MGMT_NET, check=False)
-    virsh.run("net-start", config.MGMT_NET, check=False)
-    return f"{live or 'unknown'} -> {config.MGMT_SUBNET}"
 
 
 def ensure_mgmt_network() -> bool:

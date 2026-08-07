@@ -82,8 +82,16 @@ def main() -> int:
                               'mgmt_subnet  = "192.168.150.0/24"' in msg, msg)
             failures += check("...offers a correct gateway with it",
                               'mgmt_gateway = "192.168.150.1"' in msg, msg)
-            failures += check("...and the migrating way out",
-                              "--migrate" in msg, msg)
+            failures += check("...and the way to move deliberately",
+                              "net-undefine" in msg, msg)
+            # An error that names a command the tool does not have sends the
+            # reader somewhere that does not exist. The first version pointed
+            # at `vmorch net --migrate`, which was never wired up.
+            import re as _re
+            for cmd in _re.findall(r"\bvmorch ([a-z]+)", msg):
+                failures += check(f"...and 'vmorch {cmd}' is a real command",
+                                  f'"{cmd}"' in (ROOT / "vmorch" / "cli.py").read_text(),
+                                  f"the message points at `vmorch {cmd}`")
 
         # No network yet: nothing to compare, and `vmorch new` on a clean host
         # must not trip over this.

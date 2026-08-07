@@ -355,6 +355,19 @@ localnet_pool  = "10.150.16.0/20"
 
 ## When something goes wrong
 
+**`ssh <box>` times out on a box that was just created.** Check whether the
+management network matches your config:
+
+```bash
+virsh -c qemu:///system net-dumpxml vmorch-mgmt | grep "<ip"
+```
+
+If that subnet differs from `mgmt_subnet`, the box was allocated an address
+dnsmasq never hands out and came up on a random one instead. vmorch refuses this
+now and tells you both values; older versions did it silently. Pin `mgmt_subnet`
+and `mgmt_gateway` to what the network actually serves, or destroy the boxes and
+start over on the new plan.
+
 **`ssh <box>` refuses the connection, but the box pings.** Usually sshd failed
 to start for want of host keys. `vmorch logs <box>` will show it. `vmorch reseed
 <box>` regenerates them.
