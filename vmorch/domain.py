@@ -23,9 +23,24 @@ Three things here are load-bearing and easy to get wrong:
 from __future__ import annotations
 
 from pathlib import Path
+from xml.sax.saxutils import quoteattr
 
 from . import config
 from .spec import BoxSpec
+
+
+def attr(value) -> str:
+    """A value as a quoted XML attribute, escaped.
+
+    Box names are validated, but a shared folder's path is whatever directory
+    the owner pointed at, and `&` or an apostrophe in it is perfectly legal on
+    disk. Interpolating one raw produced a domain libvirt rejected as malformed,
+    with an error naming the XML rather than the folder that caused it.
+
+    quoteattr picks the quoting and escapes the content, so the caller writes
+    `dir={attr(path)}` with no quotes of its own.
+    """
+    return quoteattr(str(value))
 
 
 #: How many virtiofs shares (and other devices) can be hot-plugged after a box
@@ -119,8 +134,8 @@ def filesystem_device_xml(folder) -> str:
     readonly = "\n  <readonly/>" if folder.readonly else ""
     return f"""<filesystem type='mount' accessmode='passthrough'>
   <driver type='virtiofs'/>
-  <source dir='{folder.host}'/>
-  <target dir='{folder.tag}'/>{readonly}
+  <source dir={attr(folder.host)}/>
+  <target dir={attr(folder.tag)}/>{readonly}
 </filesystem>
 """
 
@@ -135,15 +150,18 @@ def _filesystem_xml(spec: BoxSpec) -> str:
         parts.append(
             f"""    <filesystem type='mount' accessmode='passthrough'>
       <driver type='virtiofs'/>
-      <source dir='{folder.host}'/>
-      <target dir='{folder.tag}'/>{readonly}
+      <source dir={attr(folder.host)}/>
+      <target dir={attr(folder.tag)}/>{readonly}
     </filesystem>"""
         )
     return "\n".join(parts)
 
 
 def _interfaces_xml(spec: BoxSpec, mac: str, wan_mac: str) -> str:
-    box_filter = f'vmorch-box-{spec.name}'
+    # Via services.box_filter_name, not a second copy of the format string: the
+    # two must agree or the domain references a filter that does not exist.
+    from .services import box_filter_name
+    box_filter = box_filter_name(spec.name)
     # nic0: management. Always present. <port isolated='yes'/> stops this box
     # reaching any other box on the same bridge -- boxes are single-agent and
     # have no reason to talk to each other. libvirt 12.0.0 supports it.
@@ -204,7 +222,7 @@ def build(spec: BoxSpec, disk_path: str, mac: str, wan_mac: str, cid: int,
     if seed_iso:
         seed = f"""    <disk type='file' device='cdrom'>
       <driver name='qemu' type='raw'/>
-      <source file='{seed_iso}'/>
+      <source file={attr(seed_iso)}/>
       <target dev='sda' bus='sata'/>
       <readonly/>
     </disk>
@@ -271,7 +289,7 @@ def build(spec: BoxSpec, disk_path: str, mac: str, wan_mac: str, cid: int,
            that way, and snapshot pruning - which rebases those layers with
            qemu-img as the owner - fails with "Permission denied". qemu reaches
            them through the ACL on the state directory instead. -->
-      <source file='{disk_path}'>
+      <source file={attr(disk_path)}>
         <seclabel model='dac' relabel='no'/>
       </source>
       <target dev='vda' bus='virtio'/>
@@ -297,7 +315,7 @@ def build(spec: BoxSpec, disk_path: str, mac: str, wan_mac: str, cid: int,
          it. Using a pty for the console itself also makes `virsh console`
          work, which <console type='file'> does not. -->
     <console type='pty'>
-      <log file='{console_log}' append='on'/>
+      <log file={attr(console_log)} append='on'/>
       <target type='serial' port='0'/>
     </console>
 

@@ -902,6 +902,10 @@ def grant_service(name: str, svc_name: str, host_port: int, guest_port: int,
 
 def revoke_service(name: str, svc_name: str) -> Box:
     box = load(name)
+    # Checked before it reaches a shell in the guest, even though it must
+    # already be in the spec to be revoked -- a spec edited by hand is still an
+    # input.
+    spec_mod.validate_service_name(svc_name)
     remaining = [s for s in box.spec.from_host if s.name != svc_name]
     if len(remaining) == len(box.spec.from_host):
         raise BoxError(f"box {name!r} has no service {svc_name!r}")

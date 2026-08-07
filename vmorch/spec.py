@@ -15,6 +15,7 @@ open.
 
 from __future__ import annotations
 
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -63,6 +64,45 @@ class Service:
     via: str
 
 
+#: A box name becomes a directory under BOXES_DIR, a libvirt domain name, an
+#: nwfilter name and an ssh config Host. Anything outside this set escapes at
+#: least one of them.
+_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+#: Room for the "vmorch-" prefix and the "golden-build-" one, inside libvirt's
+#: own limits and a comfortable margin for the generated filenames.
+NAME_MAX = 48
+
+
+def validate_name(name: object) -> str:
+    """The single gate every box name passes through.
+
+    This lived inside `parse()`, which is only reached when *re-reading* a
+    box.toml -- so neither `vm new` nor the TUI ever ran it, because both build
+    a BoxSpec directly. A name was therefore validated only after it had already
+    been used to create directories and write files. `BoxSpec(name="../../x")`
+    put a box outside BOXES_DIR entirely, and a name containing a quote escaped
+    the attribute it was interpolated into in the generated domain XML.
+
+    It is now enforced in BoxSpec.__post_init__, so there is no way to construct
+    an invalid spec at all, whichever path builds it.
+    """
+    if not isinstance(name, str) or not name:
+        raise SpecError(f"box name must be a non-empty string, got {name!r}")
+    if len(name) > NAME_MAX:
+        raise SpecError(
+            f"box name {name!r} is {len(name)} characters; the limit is "
+            f"{NAME_MAX}"
+        )
+    if not _NAME_RE.match(name):
+        raise SpecError(
+            f"box name {name!r} must be letters, digits, - or _, starting with "
+            "a letter or digit. The name becomes a directory, a libvirt domain "
+            "and an ssh host alias."
+        )
+    return name
+
+
 @dataclass
 class BoxSpec:
     name: str
@@ -102,6 +142,9 @@ class BoxSpec:
     from_host: list[Service] = field(default_factory=list)
     to_host: list[Service] = field(default_factory=list)
     packages: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        validate_name(self.name)
 
     @property
     def domain(self) -> str:
@@ -208,10 +251,31 @@ def _parse_folder(raw: dict, index: int) -> Folder:
     return Folder(host=resolved, tag=tag, mode=_parse_mode(raw.get("mode"), tag))
 
 
+#: A service name becomes a systemd unit filename inside the guest and part of
+#: a shell command run there as root, so it is held to the same set as a box
+#: name rather than taken as-is.
+_SERVICE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
+def validate_service_name(name: str) -> str:
+    if not _SERVICE_RE.match(str(name)):
+        raise SpecError(
+            f"service name {name!r}: letters, digits, - or _ only, starting "
+            "with a letter or digit."
+        )
+    return str(name)
+
+
 def _parse_service(raw: dict, index: int, valid_via: set[str], default_via: str) -> Service:
     if "name" not in raw:
         raise SpecError(f"service #{index}: missing 'name'")
     name = str(raw["name"])
+    if not _SERVICE_RE.match(name):
+        raise SpecError(
+            f"service name {name!r}: letters, digits, - or _ only, starting "
+            "with a letter or digit. The name becomes a systemd unit filename "
+            "inside the box."
+        )
     via = str(raw.get("via", default_via)).strip().lower()
     if via not in valid_via:
         raise SpecError(
@@ -224,6 +288,11 @@ def _parse_service(raw: dict, index: int, valid_via: set[str], default_via: str)
         raise SpecError(
             f"service {name!r}: needs integer 'host' and 'guest' ports"
         ) from exc
+    for label, port in (("host", host_port), ("guest", guest_port)):
+        if not 1 <= port <= 65535:
+            raise SpecError(
+                f"service {name!r}: {label} port {port} is out of range"
+            )
     return Service(name=name, host_port=host_port, guest_port=guest_port, via=via)
 
 
@@ -232,11 +301,7 @@ def parse(data: dict, name: str | None = None) -> BoxSpec:
     name = name or data.get("name")
     if not name:
         raise SpecError("spec has no 'name'")
-    name = str(name)
-    if not name.replace("-", "").replace("_", "").isalnum():
-        raise SpecError(
-            f"box name {name!r} must be alphanumeric with - or _ only"
-        )
+    name = validate_name(str(name))
 
     network = data.get("network", {})
     services = data.get("services", {})
@@ -283,6 +348,21 @@ def load(path: Path) -> BoxSpec:
     return parse(data)
 
 
+def _toml_str(value) -> str:
+    """A TOML basic string, escaped.
+
+    Hand-rolled emission is fine for a schema this small, but bare f-string
+    quoting is not: a shared folder's path may legally contain a backslash or a
+    double quote, and either one produced a box.toml the tool could no longer
+    read back -- a spec that writes but does not load.
+    """
+    text = str(value)
+    for raw, esc in (("\\", "\\\\"), ('"', '\\"'), ("\n", "\\n"),
+                     ("\r", "\\r"), ("\t", "\\t")):
+        text = text.replace(raw, esc)
+    return f'"{text}"'
+
+
 def dump(spec: BoxSpec) -> str:
     """Emit a box.toml.
 
@@ -290,13 +370,13 @@ def dump(spec: BoxSpec) -> str:
     fixed, and benefits from the explanatory comments we can place inline.
     """
     lines = [
-        f'name = "{spec.name}"',
-        f'image = "{spec.image}"',
+        f"name = {_toml_str(spec.name)}",
+        f"image = {_toml_str(spec.image)}",
         f"cpus = {spec.cpus}",
-        f'memory = "{spec.memory}"',
-        f'disk = "{spec.disk}"',
-        f'user = "{spec.user}"',
-        f'sudo = "{spec.sudo}"',
+        f"memory = {_toml_str(spec.memory)}",
+        f"disk = {_toml_str(spec.disk)}",
+        f"user = {_toml_str(spec.user)}",
+        f"sudo = {_toml_str(spec.sudo)}",
         f"nested = {str(spec.nested).lower()}",
         "",
         "[network]",
@@ -306,11 +386,11 @@ def dump(spec: BoxSpec) -> str:
         f"lan = {str(spec.lan).lower()}",
         "# nets: local networks this box shares with other boxes. Members-only",
         "# segments -- no gateway, no host, no internet. `vm net ls` lists them.",
-        "nets = [" + ", ".join(f'"{n}"' for n in spec.nets) + "]",
+        "nets = [" + ", ".join(_toml_str(n) for n in spec.nets) + "]",
         "# routes_for: nets this box FORWARDS on -- the firewall role. Its own",
         "# source-address pin is dropped on those nets, because forwarding means",
         "# sending packets that are not yours. Every other member stays pinned.",
-        "routes_for = [" + ", ".join(f'"{n}"' for n in spec.routes_for) + "]",
+        "routes_for = [" + ", ".join(_toml_str(n) for n in spec.routes_for) + "]",
         "",
     ]
 
@@ -318,29 +398,29 @@ def dump(spec: BoxSpec) -> str:
         lines.append("# Folders are READ-ONLY unless mode = \"rw\" is set.")
     for f in spec.folders:
         lines.append("[[folders]]")
-        lines.append(f'host = "{f.host}"')
-        lines.append(f'tag = "{f.tag}"')
-        lines.append(f'mode = "{f.mode}"')
+        lines.append(f"host = {_toml_str(f.host)}")
+        lines.append(f"tag = {_toml_str(f.tag)}")
+        lines.append(f"mode = {_toml_str(f.mode)}")
         lines.append("")
 
     for svc in spec.from_host:
         lines.append("[[services.from_host]]")
-        lines.append(f'name = "{svc.name}"')
+        lines.append(f"name = {_toml_str(svc.name)}")
         lines.append(f"host = {svc.host_port}")
         lines.append(f"guest = {svc.guest_port}")
-        lines.append(f'via = "{svc.via}"')
+        lines.append(f"via = {_toml_str(svc.via)}")
         lines.append("")
 
     for svc in spec.to_host:
         lines.append("[[services.to_host]]")
-        lines.append(f'name = "{svc.name}"')
+        lines.append(f"name = {_toml_str(svc.name)}")
         lines.append(f"guest = {svc.guest_port}")
         lines.append(f"host = {svc.host_port}")
-        lines.append(f'via = "{svc.via}"')
+        lines.append(f"via = {_toml_str(svc.via)}")
         lines.append("")
 
     if spec.packages:
-        pkgs = ", ".join(f'"{p}"' for p in spec.packages)
+        pkgs = ", ".join(_toml_str(p) for p in spec.packages)
         lines.append(f"packages = [{pkgs}]")
         lines.append("")
 
