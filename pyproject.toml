@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=77"]   # PEP 639 license expression support
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vmorch"
+version = "0.1.0"
+description = "Disposable, reconfigurable VM sandboxes for agents on a single workstation"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "vhenriquez" }]
+keywords = ["libvirt", "qemu", "kvm", "sandbox", "cloud-init", "virtiofs"]
+
+# 3.11 is a hard floor, not a preference: config parsing uses tomllib, which
+# entered the stdlib in 3.11. Without this line the failure is a bare
+# ModuleNotFoundError with nothing to say why.
+requires-python = ">=3.11"
+
+# Deliberately empty, and worth keeping that way. Everything is stdlib, so
+# installing this pulls in nothing and cannot break anyone's environment. A
+# change here is a change to that promise.
+dependencies = []
+
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Environment :: Console :: Curses",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    # Unix only, and not incidentally: fcntl locks the allocation ledger and
+    # curses draws the TUI. Neither has a Windows equivalent here.
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Emulators",
+    "Topic :: System :: Systems Administration",
+]
+
+[project.urls]
+Homepage = "https://github.com/vhenriquez/vmorch"
+Source = "https://github.com/vhenriquez/vmorch"
+Issues = "https://github.com/vhenriquez/vmorch/issues"
+
+[project.scripts]
+# Named for the package rather than the shorter `vm`: a tool installed from
+# PyPI has no business claiming a name that generic on someone's PATH.
+vmorch = "vmorch.cli:main"
+vmorch-tui = "vmorch.tui:main"
+
+[tool.setuptools.packages.find]
+include = ["vmorch*"]

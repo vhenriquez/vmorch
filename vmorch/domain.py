@@ -1,6 +1,6 @@
 """Generate libvirt domain XML from a box spec.
 
-The XML is derived state. The spec is the source of truth, and `vm apply`
+The XML is derived state. The spec is the source of truth, and `vmorch apply`
 regenerates this whole document rather than patching it -- which is what keeps
 reconfiguration honest.
 
@@ -234,7 +234,7 @@ def build(spec: BoxSpec, disk_path: str, mac: str, wan_mac: str, cid: int,
         filesystems += "\n"
 
     # Redefining an existing domain requires its current UUID: libvirt rejects
-    # the XML outright otherwise, which would make `vm apply` work exactly once
+    # the XML outright otherwise, which would make `vmorch apply` work exactly once
     # -- at creation -- and fail on every reconfiguration after that.
     uuid_line = f"\n  <uuid>{uuid}</uuid>" if uuid else ""
 
@@ -320,8 +320,22 @@ def build(spec: BoxSpec, disk_path: str, mac: str, wan_mac: str, cid: int,
       <target type='serial' port='0'/>
     </console>
 
-    <!-- No clipboard, no SPICE agent, no shared display: those are the
-         conveniences that quietly re-open the boundary. -->
+    <!-- No clipboard and no SPICE agent: those are the conveniences that
+         quietly re-open the guest->host boundary.
+
+         VNC is still here, because without it the box has no console and
+         virt-manager cannot show one. Be clear about what it costs: it listens
+         on host loopback with NO password, so any local user on the host has
+         full console access to every box: keyboard and screen, bypassing ssh
+         entirely. That is a wider grant than the rest of the tool makes to
+         other local accounts, which get nothing (see hostaccess.py, where the
+         state directory is deliberately kept off o+rx and qemu is reached by a
+         single-account ACL instead).
+
+         It is accepted on a single-user workstation, which is what this is
+         built for, and documented in SECURITY.md rather than left implicit.
+         On a multi-user host, drop this element: everything except the console
+         keeps working. -->
     <graphics type='vnc' port='-1' listen='127.0.0.1'/>
     <video>
       <model type='virtio'/>

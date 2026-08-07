@@ -67,7 +67,7 @@ def main() -> int:
               f"{'' if ok else f'  got {m.groupdict() if m else None}'}")
         failures += 0 if ok else 1
 
-    # A blocked verdict must be recognisable as such: `vm audit --blocked`
+    # A blocked verdict must be recognisable as such: `vmorch audit --blocked`
     # filters on it, and that is the view that matters most.
     for verdict in ("blocked-private", "blocked-dns", "blocked-dot"):
         ok = verdict.startswith("block")

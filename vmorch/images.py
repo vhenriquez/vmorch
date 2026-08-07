@@ -62,7 +62,7 @@ class CatalogueEntry:
     #: qcow2 -- Kali does. The published checksum covers the *archive*, so it is
     #: verified first and the disk extracted afterwards.
     archive_member: str = ""
-    #: A golden image built locally by `vm golden`. Nothing to download.
+    #: A golden image built locally by `vmorch golden`. Nothing to download.
     local: bool = False
     #: Hide a built-in entry you never want to see. The built-in catalogue is
     #: compiled in, so this is the only way to get rid of one -- deleting its
@@ -77,8 +77,8 @@ class CatalogueEntry:
     def filename(self) -> str:
         # Falls back to the key for an entry with no url. Returning "" made
         # `cached` below evaluate to the cache *directory*, which always exists
-        # -- so `vm images` marked every locally built golden image as
-        # DOWNLOADED, and `vm rmimage` planned to delete the whole cache.
+        # -- so `vmorch images` marked every locally built golden image as
+        # DOWNLOADED, and `vmorch rmimage` planned to delete the whole cache.
         return self.url.rsplit("/", 1)[-1] if self.url else self.key
 
     @property
@@ -138,7 +138,7 @@ class ImageError(RuntimeError):
 #
 # Adding an image should not mean editing this file. ~/vmorch/images.toml is
 # merged over the built-ins, so a new distro is a few lines of config, and
-# golden images built by `vm golden` register themselves there.
+# golden images built by `vmorch golden` register themselves there.
 # --------------------------------------------------------------------------
 
 USER_CATALOGUE = config.STATE_DIR / "images.toml"
@@ -163,7 +163,7 @@ EXAMPLE_USER_CATALOGUE = '''\
 #   [debian-12]
 #   hidden = true
 #
-# A golden image built locally is added for you by `vm golden`.
+# A golden image built locally is added for you by `vmorch golden`.
 '''
 
 
@@ -209,13 +209,13 @@ def serialize_entry(entry: CatalogueEntry) -> str:
 
 CATALOGUE_HEADER = f"""\
 # vmorch image catalogue. THIS FILE IS THE CATALOGUE -- nothing is hidden in
-# the code. `vm images` lists exactly what is here.
+# the code. `vmorch images` lists exactly what is here.
 #
 # To remove an image you do not want, delete its block. That is all.
-# To add one, copy a block and edit it; `vm golden` appends its own.
+# To add one, copy a block and edit it; `vmorch golden` appends its own.
 # To keep an entry but hide it from listings, set hidden = true.
 #
-# Restore the images that ship with vmorch: vm images --restore-defaults
+# Restore the images that ship with vmorch: vmorch images --restore-defaults
 
 catalogue_version = {CATALOGUE_VERSION}
 """
@@ -279,7 +279,7 @@ def load_user_catalogue() -> dict[str, CatalogueEntry]:
         hidden = true
 
     should hide that image, not blank its url and checksum -- which is exactly
-    what building a fresh entry from the file alone did, leaving `vm new --image
+    what building a fresh entry from the file alone did, leaving `vmorch new --image
     debian-12` unable to download anything.
     """
     if not USER_CATALOGUE.exists():
@@ -321,7 +321,7 @@ def catalogue(include_hidden: bool = False) -> dict[str, CatalogueEntry]:
 def register_local(key: str, description: str, replace: bool = False) -> None:
     """Record a locally built golden image in the user catalogue.
 
-    `replace` rewrites an entry that is already there. `vm golden --from-box`
+    `replace` rewrites an entry that is already there. `vmorch golden --from-box`
     registers a provisional entry before it can build (the throwaway box is
     created *from* this image, so the catalogue has to know it first) and needs
     to correct the description once the image is real -- without it the
@@ -558,7 +558,7 @@ def remove(plan: RemovalPlan, force: bool = False) -> RemovalPlan:
             f"{plan.key} is the base for {len(plan.used_by)} box(es): "
             f"{', '.join(plan.used_by)}\n"
             "  Their disks are overlays on it, so deleting it would break them.\n"
-            f"  Destroy them first (vm rm {plan.used_by[0]}), or pass --force to\n"
+            f"  Destroy them first (vmorch rm {plan.used_by[0]}), or pass --force to\n"
             "  remove the catalogue entry and cache but keep the base file."
         )
 
@@ -724,7 +724,7 @@ def ensure_base(entry: CatalogueEntry) -> Path:
     if entry.local:
         raise ImageError(
             f"golden image {entry.key!r} is registered but its file is missing: "
-            f"{base}. Rebuild it with `vm golden`."
+            f"{base}. Rebuild it with `vmorch golden`."
         )
 
     cached = download(entry)

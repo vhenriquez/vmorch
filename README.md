@@ -8,7 +8,7 @@ public internet. Nothing else.
 
 ## Two front ends
 
-`./vmtui` is a Norton Commander style control panel — two panels, Tab between
+`vmorch-tui` is a Norton Commander style control panel — two panels, Tab between
 them, function keys along the bottom. Everything the CLI does is reachable from
 it, and F9 lists every action with its shortcut. Left panel = boxes, right panel
 = the selected box's grants.
@@ -23,26 +23,68 @@ F8 is contextual: on the left it destroys a box, on the right it revokes the one
 folder or service under the cursor. Enter on a box opens a real ssh session;
 Enter on a snapshot rolls back to it.
 
+## Install
+
+Python 3.11 or newer (config parsing uses `tomllib`), Linux, and **no Python
+dependencies at all** — everything is standard library, so installing this
+pulls in nothing.
+
+```bash
+pip install git+https://github.com/vhenriquez/vmorch
+```
+
+That puts `vmorch` and `vmorch-tui` on your PATH. Or run it straight from a
+clone, with no install step:
+
+```bash
+git clone https://github.com/vhenriquez/vmorch && cd vmorch
+python3 -m vmorch --help
+python3 -m vmorch.tui
+```
+
+Both are supported. The rest of this README writes `vmorch`; substitute
+`python3 -m vmorch` if you are running from a clone.
+
+What is **not** a Python dependency, and has to be there anyway:
+
+| Needed for | |
+|---|---|
+| `libvirt` + `qemu-kvm` | everything |
+| membership of the `libvirt` group | `qemu:///system` without sudo |
+| `cloud-image-utils` (`cloud-localds`) | building the seed ISO |
+| `qemu-img` | overlays, snapshots, resizing |
+| `acl` (`setfacl`/`getfacl`) | granting qemu access to the state directory |
+| virtiofs support in libvirt/qemu | shared folders |
+
+On Debian or Ubuntu:
+
+```bash
+sudo apt install libvirt-daemon-system qemu-kvm cloud-image-utils acl
+sudo usermod -aG libvirt "$USER"     # log out and back in
+```
+
+No root is needed at runtime.
+
 ## Quick start
 
 ```bash
-./vm new agent-alpha                  # isolated: no internet, no host access
-ssh agent-alpha                       # works about a minute later
+vmorch new agent-alpha                  # isolated: no internet, no host access
+ssh agent-alpha                         # works about a minute later
 
-./vm share agent-alpha ~/code/thing   # read-only by default
-./vm share agent-alpha ~/scratch --rw # writes reach the host: deliberate
+vmorch share agent-alpha ~/code/thing   # read-only by default
+vmorch share agent-alpha ~/scratch --rw # writes reach the host: deliberate
 
-./vm service agent-alpha ollama --host-port 11434   # GPU compute, no GPU handover
+vmorch service agent-alpha ollama --host-port 11434  # GPU compute, no GPU handover
 
-./vm stop agent-alpha
-./vm snapshot agent-alpha before-experiment
-./vm start agent-alpha
+vmorch stop agent-alpha
+vmorch snapshot agent-alpha before-experiment
+vmorch start agent-alpha
 # ... let the agent break things ...
-./vm stop agent-alpha && ./vm rollback agent-alpha 1
+vmorch stop agent-alpha && vmorch rollback agent-alpha 1
 ```
 
-`./vm ls` lists stopped boxes alongside running ones. `./vm show <box>` prints
-the full grant set, with writable shares called out loudly.
+`vmorch ls` lists stopped boxes alongside running ones. `vmorch show <box>`
+prints the full grant set, with writable shares called out loudly.
 
 ## What the boundary is
 
@@ -146,17 +188,28 @@ Each is commented where it bites.
   catch a hostile mirror, which can serve a matching sums file. Verifying the
   detached GPG signature would close this and is not implemented.
 - **`via: ssh` and `via: vsock` service sharing are designed, not built.**
-  `vm service` refuses them rather than recording a grant that does nothing.
-- **No golden image ships.** `vm golden` builds one; until you do, boxes boot
+  `vmorch service` refuses them rather than recording a grant that does nothing.
+- **No golden image ships.** `vmorch golden` builds one; until you do, boxes boot
   the plain cloud image and `packages:` needs a box with internet.
 - **DNS-over-HTTPS is invisible to the audit.** It is HTTPS to port 443 and
   indistinguishable from other web traffic without blocking providers outright.
   The connection log still shows the flow.
-- **Boxes do not autostart after a host reboot.** `vm ls` still lists them;
-  `vm start <box>` brings one back.
+- **Boxes do not autostart after a host reboot.** `vmorch ls` still lists them;
+  `vmorch start <box>` brings one back.
 
-## Requirements
+## Contributing
 
-libvirt/qemu with virtiofs, `cloud-image-utils`, and membership of the `libvirt`
-group. No root needed at runtime; `setfacl` grants qemu access to the state
-directory as the owner.
+See [CONTRIBUTING.md](CONTRIBUTING.md). The short version: `./run-tests` needs
+nothing but Python 3.11+ — no libvirt, no network, no dependencies — and it has
+to stay that way.
+
+## Security
+
+The isolation properties above are claims, and they were tested rather than
+inferred. If you find one that does not hold, see [SECURITY.md](SECURITY.md) —
+it also lists what is deliberately *not* a boundary, which saves reporting
+things that are working as designed.
+
+## Licence
+
+Apache-2.0. See [LICENSE](LICENSE).

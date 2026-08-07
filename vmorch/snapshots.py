@@ -90,7 +90,7 @@ def _backing_of(disk: Path) -> str | None:
 
 
 #: A label becomes part of a filename, so it may not contain a path separator or
-#: traverse out of the snapshot directory. Without this, `vm snapshot box ../x`
+#: traverse out of the snapshot directory. Without this, `vmorch snapshot box ../x`
 #: renamed the box's live disk outside its own directory.
 _LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
@@ -176,12 +176,12 @@ def rollback(box_dir: Path, disk: Path, index: int,
 
     `size` keeps a rollback from undoing a disk resize. A new overlay inherits
     its backing file's virtual size, so rolling back to a snapshot taken before
-    `vm disk` would silently shrink the box back to the old size -- and the box
+    `vmorch disk` would silently shrink the box back to the old size -- and the box
     would still boot, because the partition table inside that snapshot matches,
     which is precisely what makes the shrink easy to miss. Passing the spec's
     size instead creates the overlay at full size; an overlay larger than its
     backing layer is normal, and the tail is simply unpartitioned until
-    `vm disk <name>` grows the filesystem into it.
+    `vmorch disk <name>` grows the filesystem into it.
     """
     snaps = load_all(box_dir)
     target = next((s for s in snaps if s.index == index), None)

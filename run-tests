@@ -1,6 +1,11 @@
 #!/bin/sh
-# Every check, in one command. The docs check is included deliberately: a
-# feature that is not documented is not finished.
+# Every check, in one command. No arguments, no dependencies, no libvirt: this
+# has to work on a fresh clone or it is not much of a check.
+#
+# cd to the repo root first, so `./run-tests` works from anywhere rather than
+# only from the directory it happens to live in.
+cd "$(dirname "$0")" || exit 1
+
 fail=0
 for t in tests/test_*.py; do
     printf '%-28s ' "$(basename "$t")"

@@ -6,7 +6,7 @@ mistake:
 **box -> host** is nearly free. The box already holds a stable address on the
 management network and the host can route to it, so `via: direct` needs no
 plumbing at all -- the guest service just has to bind 0.0.0.0 rather than
-127.0.0.1. It is recorded in the spec so `vm show` can list it.
+127.0.0.1. It is recorded in the spec so `vmorch show` can list it.
 
 **host -> box** is the direction that costs something, because guest-initiated
 traffic to the host is dropped by default. Every entry is a deliberate hole:

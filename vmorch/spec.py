@@ -65,7 +65,7 @@ FORBIDDEN_FOLDERS = [
 #: The line is between the host's *code and credentials* and its *data*.
 #: ~/code, /srv/data and /var/www are reasonable things to grant; nothing below
 #: /usr, /boot, /etc or /proc ever is, because that is where the host keeps what
-#: it executes and what it trusts. $HOME is here so `vm share box ~/code` works
+#: it executes and what it trusts. $HOME is here so `vmorch share box ~/code` works
 #: -- the dotfile directories below it are separate entries and stay refused.
 _SHARE_INSIDE_OK = {Path("/"), Path("/home"), Path.home(),
                     Path("/srv"), Path("/opt"), Path("/var")}
@@ -110,7 +110,7 @@ def validate_name(name: object) -> str:
     """The single gate every box name passes through.
 
     This lived inside `parse()`, which is only reached when *re-reading* a
-    box.toml -- so neither `vm new` nor the TUI ever ran it, because both build
+    box.toml -- so neither `vmorch new` nor the TUI ever ran it, because both build
     a BoxSpec directly. A name was therefore validated only after it had already
     been used to create directories and write files. `BoxSpec(name="../../x")`
     put a box outside BOXES_DIR entirely, and a name containing a quote escaped
@@ -168,7 +168,7 @@ class BoxSpec:
     #: anti-spoofing stay on even here.
     #:
     #: Named rather than a boolean because the relaxation has to be visible in
-    #: the spec: `vm show` and `vm net ls` can then say which box holds it.
+    #: the spec: `vmorch show` and `vmorch net ls` can then say which box holds it.
     routes_for: list[str] = field(default_factory=list)
     folders: list[Folder] = field(default_factory=list)
     from_host: list[Service] = field(default_factory=list)
@@ -184,7 +184,7 @@ class BoxSpec:
 
     @property
     def writable_folders(self) -> list[Folder]:
-        """Surfaced prominently by `vm show` — an rw grant must never be quiet."""
+        """Surfaced prominently by `vmorch show` — an rw grant must never be quiet."""
         return [f for f in self.folders if not f.readonly]
 
 
@@ -427,7 +427,7 @@ def dump(spec: BoxSpec) -> str:
         f"internet = {str(spec.internet).lower()}",
         f"lan = {str(spec.lan).lower()}",
         "# nets: local networks this box shares with other boxes. Members-only",
-        "# segments -- no gateway, no host, no internet. `vm net ls` lists them.",
+        "# segments -- no gateway, no host, no internet. `vmorch net ls` lists them.",
         "nets = [" + ", ".join(_toml_str(n) for n in spec.nets) + "]",
         "# routes_for: nets this box FORWARDS on -- the firewall role. Its own",
         "# source-address pin is dropped on those nets, because forwarding means",

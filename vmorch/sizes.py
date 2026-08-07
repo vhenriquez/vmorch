@@ -3,8 +3,8 @@
 There were two parsers with different unit tables -- boxes._bytes_of understood
 T, domain._memory_kib did not -- so the same string was valid for a disk and a
 traceback for memory. And rendering rounded to one decimal while parsing did
-not, so a size could fail to survive a round trip: `vm disk` wrote "60.5G" back
-into the spec, the next `vm apply` read it as smaller than the real disk, and
+not, so a size could fail to survive a round trip: `vmorch disk` wrote "60.5G" back
+into the spec, the next `vmorch apply` read it as smaller than the real disk, and
 refused with "refusing to shrink" on a box nobody had shrunk.
 
 Rendering is therefore exact by construction: whole GiB where it divides, and
@@ -41,7 +41,7 @@ def render(size_bytes: int) -> str:
 
     Never rounds. Falls back to the byte count rather than emit a figure that
     would not round-trip -- a size the spec cannot reproduce is what made
-    `vm apply` refuse a disk it had itself just written.
+    `vmorch apply` refuse a disk it had itself just written.
     """
     for suffix in ("T", "G", "M", "K"):
         unit = UNITS[suffix]

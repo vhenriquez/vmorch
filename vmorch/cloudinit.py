@@ -4,7 +4,7 @@ This is what removes the OS installer from the loop: a distro cloud image plus a
 seed ISO boots straight to a configured, SSH-reachable system.
 
 **cloud-init runs once, on first boot.** Nothing in the reconfigure path may
-depend on it -- `vm apply` on an existing box works through domain XML and
+depend on it -- `vmorch apply` on an existing box works through domain XML and
 in-guest commands over SSH instead. The create path and the reconfigure path
 look deceptively similar and are not the same thing.
 
@@ -66,7 +66,7 @@ def _sudoers_line(spec: BoxSpec) -> str:
     "password" is not the same as "the agent can escalate": the secret is
     generated host-side and set over SSH after first boot, so it never enters
     the seed ISO or cloud-init's instance data. A human who needs to fix
-    something reads it with `vm password <box>`.
+    something reads it with `vmorch password <box>`.
 
     It used to be written into a cloud-init runcmd, which put it in cleartext on
     a device attached to the box and in /var/lib/cloud -- protected by nothing
@@ -146,7 +146,7 @@ def user_data(spec: BoxSpec, router_subnets: list[str] | None = None) -> str:
         # user is allowed. Key-only, and the private half never leaves the
         # host, so the agent cannot use this entry even though it can read
         # nothing of it. Without this, taking sudo away from the agent would
-        # also break `vm share`, `vm service` and `vm golden`.
+        # also break `vmorch share`, `vmorch service` and `vmorch golden`.
         "  - name: root",
         "    ssh_authorized_keys:",
         f"      - {pub}",
@@ -248,7 +248,7 @@ def meta_data(spec: BoxSpec, instance_id: str | None = None) -> str:
     # instance-id is what cloud-init uses to decide whether it has already run.
     # Keyed to the box name so a rebuilt box re-runs setup -- and changing it is
     # the supported way to make an EXISTING box run its first-boot config again,
-    # which is what `vm reseed` does to repair a box whose ssh has broken.
+    # which is what `vmorch reseed` does to repair a box whose ssh has broken.
     return (f"instance-id: {instance_id or spec.domain}\n"
             f"local-hostname: {spec.name}\n")
 

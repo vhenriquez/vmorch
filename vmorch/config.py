@@ -121,7 +121,7 @@ NAT_NET = "default"
 # no reason to invite one.
 #
 # The prefix length is a real limit, not decoration: a /20 holds 16 /24s, and
-# `vm net create` refuses the 17th rather than quietly handing out a subnet
+# `vmorch net create` refuses the 17th rather than quietly handing out a subnet
 # outside the pool it was told to use.
 LOCALNET_POOL = _value("localnet_pool", "10.150.16.0/20")
 
@@ -171,7 +171,7 @@ ALLOC_FILE = STATE_DIR / "allocations.json"
 #
 # Under the state dir by default, because a default has to work on a machine
 # that is not the author's. This once pointed at a mount that existed on exactly
-# one host, and anywhere else the first `vm new` died with a bare PermissionError
+# one host, and anywhere else the first `vmorch new` died with a bare PermissionError
 # from the mkdir, before any of the tool's own error handling ran.
 DOWNLOAD_CACHE = _path("download_cache", STATE_DIR / "cloud_images")
 
@@ -270,7 +270,7 @@ DEFAULT_IMAGE = _value("default_image", "ubuntu-24.04")
 #:   "password"  sudo needs a password that is generated on the host and set
 #:               over SSH after first boot, so it is never in the seed or in
 #:               cloud-init's instance data. An agent that compromises the box
-#:               unprivileged cannot read it; a human runs `vm password <box>`.
+#:               unprivileged cannot read it; a human runs `vmorch password <box>`.
 #:   "none"      no sudo at all. Raises an unprivileged in-guest compromise
 #:               (a hostile dependency, a prompt injection) from one step to
 #:               root into two, which matters because most paths at the
@@ -280,9 +280,9 @@ DEFAULT_IMAGE = _value("default_image", "ubuntu-24.04")
 #: Neither "password" nor "none" is a boundary on its own: the boundary is the
 #: VM. They raise the cost of an in-guest compromise, nothing more.
 #:
-#: vmorch keeps its own root path either way, so `vm share`, `vm service` and
-#: `vm golden` work in both modes. Changing this on an existing box needs
-#: `vm reseed` -- cloud-init only runs at first boot.
+#: vmorch keeps its own root path either way, so `vmorch share`, `vmorch service` and
+#: `vmorch golden` work in both modes. Changing this on an existing box needs
+#: `vmorch reseed` -- cloud-init only runs at first boot.
 AGENT_SUDO = _value("agent_sudo", "nopasswd")
 
 #: Emit a <vsock> device on every box. It was added so `via: vsock` service

@@ -41,7 +41,7 @@ def _locked():
 
     allocate() reads the file, picks the first free octet and CID, and writes
     the result back. The TUI and the CLI are separate processes and the TUI
-    polls on a timer, so two `vm new` runs could interleave and hand the same
+    polls on a timer, so two `vmorch new` runs could interleave and hand the same
     address -- and the same vsock CID -- to two boxes. A CID handed out twice is
     the one thing this module says must never happen, because a stale host-side
     relay would then serve the wrong box.

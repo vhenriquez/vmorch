@@ -120,11 +120,11 @@ def _load() -> dict[str, LocalNet]:
 def _save(nets: dict[str, LocalNet]) -> None:
     NETS_FILE.parent.mkdir(parents=True, exist_ok=True)
     lines = [
-        "# vmorch local networks. Created by `vm net create`.",
+        "# vmorch local networks. Created by `vmorch net create`.",
         "#",
         "# A local net is a members-only segment: boxes attached to the same one",
         "# can reach each other, and nothing else. Editing this file by hand does",
-        "# not move a running box -- use `vm net attach` / `vm net detach`.",
+        "# not move a running box -- use `vmorch net attach` / `vmorch net detach`.",
         "",
     ]
     for net in sorted(nets.values(), key=lambda n: n.index):
@@ -144,7 +144,7 @@ def get(name: str) -> LocalNet:
     if name not in nets:
         known = ", ".join(sorted(nets)) or "none defined"
         raise NetError(f"no local network {name!r}. Known: {known}\n"
-                       f"  Create one with `vm net create {name}`")
+                       f"  Create one with `vmorch net create {name}`")
     return nets[name]
 
 
@@ -193,7 +193,7 @@ def create(name: str, subnet: str | None = None) -> LocalNet:
         raise NetError(
             f"no free subnet left in {config.LOCALNET_POOL}: it holds "
             f"{capacity} network(s) and all are in use. Widen localnet_pool in "
-            f"{config.CONFIG_FILE}, or remove a network with `vm net rm`.")
+            f"{config.CONFIG_FILE}, or remove a network with `vmorch net rm`.")
     if subnet is None:
         base = config.LOCALNET_POOL.split("/")[0].rsplit(".", 2)[0]
         third = int(config.LOCALNET_POOL.split("/")[0].rsplit(".", 2)[1]) + index
@@ -236,7 +236,7 @@ def remove(name: str, attached: list[str]) -> None:
         raise NetError(
             f"{name} still has {len(attached)} box(es) attached: "
             f"{', '.join(attached)}\n"
-            f"  Detach them first: vm net detach {attached[0]} {name}")
+            f"  Detach them first: vmorch net detach {attached[0]} {name}")
     virsh.run("net-destroy", net.libvirt_name, check=False)
     virsh.run("net-undefine", net.libvirt_name, check=False)
     nets = _load()

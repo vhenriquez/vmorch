@@ -893,7 +893,7 @@ class App:
     def act_rmimage(self) -> None:
         """Delete an image: golden base, cached download and catalogue entry.
 
-        Every option `vm rmimage` takes is here as a form field, because the
+        Every option `vmorch rmimage` takes is here as a form field, because the
         rule is that nothing is CLI-only -- and the choices genuinely matter.
         Keeping the cache is the difference between rebuilding this image
         offline and needing the network again.
@@ -1047,7 +1047,7 @@ class App:
             self.status = f"{box.name} reseeded with sudo={mode}"
         else:
             self.status = (f"{box.name} set to sudo={mode} — takes effect after "
-                           f"`vm reseed {box.name}`")
+                           f"`vmorch reseed {box.name}`")
         self.refresh_boxes()
 
     def act_reseed(self) -> None:
@@ -1229,7 +1229,7 @@ class App:
                        "Building a golden image boots a temporary box, installs "
                        "into it and flattens the result. It takes several "
                        "minutes and is best watched, so run it from the CLI:\n\n"
-                       "  vm golden agent-base --packages tmux,git")
+                       "  vmorch golden agent-base --packages tmux,git")
         elif choice == "audit":
             import io, contextlib
             from .. import cli as _cli

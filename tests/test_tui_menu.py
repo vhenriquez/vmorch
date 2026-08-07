@@ -29,7 +29,7 @@ ALIASES = {
     "snapshot": "snap",
     "start": "toggle",
     "stop": "toggle",
-    # `vm net` grew subcommands. They are nested under one parser in the CLI and
+    # `vmorch net` grew subcommands. They are nested under one parser in the CLI and
     # under one submenu in the TUI, so they are checked by their full names.
     "net ls": "netls",
     "net create": "netcreate",
@@ -83,7 +83,7 @@ def report(label: str, missing: set[str]) -> int:
 
 
 def cli_new_flags() -> set[str]:
-    """Options on `vm new`. Every one must be settable from the TUI."""
+    """Options on `vmorch new`. Every one must be settable from the TUI."""
     import re as _re
     cli = (ROOT / "vmorch" / "cli.py").read_text()
     block = _re.search(r"new = sub\.add_parser.*?new\.set_defaults", cli, _re.S)
@@ -212,7 +212,7 @@ def main() -> int:
         key = FLAG_FIELDS.get(flag, flag.lstrip("-").replace("-", "_"))
         if f'"key": "{key}"' not in tui:
             missing_flags.add(flag)
-    failures += report("every `vm new` option is settable in the TUI",
+    failures += report("every `vmorch new` option is settable in the TUI",
                        missing_flags)
 
     # And each must carry a description, so the TUI explains rather than lists.

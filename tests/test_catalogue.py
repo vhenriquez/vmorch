@@ -1,6 +1,6 @@
 """User catalogue merging.
 
-`vm images` lists what you *can* use, not what is on disk, so a built-in entry
+`vmorch images` lists what you *can* use, not what is on disk, so a built-in entry
 is offered whether or not its files are present. Overriding one is done by key
 in ~/vmorch/images.toml -- and that override has to **patch** the built-in.
 
@@ -9,7 +9,7 @@ Building a fresh entry from the file alone shipped once: writing
     [debian-12]
     hidden = true
 
-blanked that image's url and checksum, so `vm new --image debian-12` had
+blanked that image's url and checksum, so `vmorch new --image debian-12` had
 nothing to download. A one-line override silently breaking an image is exactly
 the kind of thing nobody notices until they need it.
 

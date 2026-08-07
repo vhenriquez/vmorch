@@ -1,8 +1,8 @@
-"""`vm apply` must reconcile the guest's network, not just the domain XML.
+"""`vmorch apply` must reconcile the guest's network, not just the domain XML.
 
 Granting internet to an existing box adds a NIC at the hypervisor and nothing
 else: the guest's config was written by cloud-init at first boot, cloud-init does
-not run again, and the interface sits DOWN while `vm apply` reports success. Same
+not run again, and the interface sits DOWN while `vmorch apply` reports success. Same
 shape as the disk field before it was reconciled -- the spec describing a box
 that does not exist, with a success message on top.
 
@@ -120,8 +120,8 @@ def main() -> int:
             failures += check("a non-netplan guest raises", False)
         except guest.GuestError as exc:
             failures += check("a non-netplan guest raises", True)
-            failures += check("...and the error points at `vm reseed`",
-                              "vm reseed" in str(exc), str(exc))
+            failures += check("...and the error points at `vmorch reseed`",
+                              "vmorch reseed" in str(exc), str(exc))
         finally:
             guest.run = real_run
 

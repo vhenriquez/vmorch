@@ -13,7 +13,7 @@ from .spec import BoxSpec
 
 EXAMPLE_CONFIG = """\
 # vmorch configuration. Every key is optional; delete what you do not need.
-# Applies to both `vm` and `vmtui`. Show the effective values with `vm config`.
+# Applies to both `vm` and `vmtui`. Show the effective values with `vmorch config`.
 
 # --- storage -----------------------------------------------------------------
 # Golden images and box overlays. These must be on FAST storage: a qcow2 chain
@@ -34,7 +34,7 @@ EXAMPLE_CONFIG = """\
 # megabytes per image off your root filesystem.
 # download_cache = "~/vmorch/cloud_images"
 
-# --- defaults for `vm new` ---------------------------------------------------
+# --- defaults for `vmorch new` ---------------------------------------------------
 # default_image  = "ubuntu-24.04"
 # default_cpus   = 4
 # default_memory = "8G"
@@ -135,7 +135,7 @@ def describe_removal(plan) -> list[str]:
     elif plan.entry.local:
         lines += ["",
                   "This is a golden image you built. There is no download to",
-                  "fall back on -- getting it back means `vm golden` again."]
+                  "fall back on -- getting it back means `vmorch golden` again."]
     elif plan.base and plan.cached:
         lines += ["",
                   "Both copies go, so rebuilding this image needs the network."]
@@ -153,7 +153,7 @@ def describe_removal(plan) -> list[str]:
 
     if plan.shipped and plan.in_catalogue:
         lines += ["",
-                  "Ships with vmorch: `vm images --restore-defaults` re-adds the",
+                  "Ships with vmorch: `vmorch images --restore-defaults` re-adds the",
                   "entry later (it does not re-download anything)."]
     return lines
 
@@ -282,7 +282,7 @@ def cmd_sudo(args) -> None:
     box = boxes.set_sudo(args.name, args.mode)
     print(f"{box.name}: sudo set to {_sudo_label(box.spec.sudo)}")
     print("  cloud-init only runs at first boot, so this takes effect after")
-    print(f"  `vm reseed {box.name}`.")
+    print(f"  `vmorch reseed {box.name}`.")
 
 
 def cmd_password(args) -> None:
@@ -397,10 +397,10 @@ def cmd_disk(args) -> None:
         print(f"  filesystem: {res['filesystem']}")
     elif res["running"]:
         print("  box is running but not reachable over ssh; start it and "
-              f"re-run `vm disk {res['name']} {res['now']}` to grow the filesystem")
+              f"re-run `vmorch disk {res['name']} {res['now']}` to grow the filesystem")
     else:
         print("  box is stopped, so only the virtual disk grew. Start it and "
-              f"run `vm disk {res['name']} {res['now']}` to grow the filesystem "
+              f"run `vmorch disk {res['name']} {res['now']}` to grow the filesystem "
               "into the new space.")
 
 
@@ -441,7 +441,7 @@ def cmd_golden(args) -> None:
             progress=show,
         )
     print(f"\ngolden image ready: {path}")
-    print(f"use it with:  vm new mybox --image {args.name}")
+    print(f"use it with:  vmorch new mybox --image {args.name}")
 
 
 def cmd_reseed(args) -> None:
@@ -533,7 +533,7 @@ def cmd_audit(args) -> None:
                 return
         done = network.enable_dns_logging()
         print(f"DNS query logging enabled on: {', '.join(done) or 'already on'}")
-        print("Queries now go to the journal; read them with `vm audit`.")
+        print("Queries now go to the journal; read them with `vmorch audit`.")
         if running:
             print(f"\nRestart these to restore networking: {', '.join(running)}")
         return
@@ -551,9 +551,9 @@ def cmd_audit(args) -> None:
 
     state = audit.available()
     if not state["dns"]:
-        print("! DNS logging is OFF. Enable with:  vm audit --enable-dns\n")
+        print("! DNS logging is OFF. Enable with:  vmorch audit --enable-dns\n")
     if not state["connections"]:
-        print("! Connection logging is OFF. Set it up with:  vm audit --install\n")
+        print("! Connection logging is OFF. Set it up with:  vmorch audit --install\n")
 
     events = audit.collect(since=args.since, box=args.box,
                            blocked_only=args.blocked)
@@ -576,7 +576,7 @@ def cmd_audit(args) -> None:
 def cmd_net_ls(args) -> None:
     found = nets.list_nets()
     if not found:
-        print("no local networks. Create one with `vm net create lab`")
+        print("no local networks. Create one with `vmorch net create lab`")
         print("\nA local network is a members-only segment: boxes attached to")
         print("the same one reach each other, and nothing else -- no gateway,")
         print("no host, no internet.")
@@ -599,7 +599,7 @@ def cmd_net_create(args) -> None:
     print(f"created local network {net.name}")
     print(f"  subnet  {net.subnet}   bridge {net.bridge}")
     print(f"  members only: no gateway, no host address, no internet")
-    print(f"\nattach a box:  vm net attach <box> {net.name}")
+    print(f"\nattach a box:  vmorch net attach <box> {net.name}")
 
 
 def cmd_net_rm(args) -> None:
@@ -651,7 +651,7 @@ def cmd_net(args) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="vm", description="Disposable, reconfigurable agent sandbox VMs"
+        prog="vmorch", description="Disposable, reconfigurable agent sandbox VMs"
     )
     sub = p.add_subparsers(dest="command", required=True)
 
@@ -664,7 +664,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     ri = sub.add_parser("rmimage",
                         help="remove an image: files, cache and catalogue entry")
-    ri.add_argument("name", help="image key, as shown by `vm images`")
+    ri.add_argument("name", help="image key, as shown by `vmorch images`")
     ri.add_argument("--yes", "-y", action="store_true",
                     help="skip the confirmation prompt")
     ri.add_argument("--keep-cache", action="store_true",
@@ -834,7 +834,7 @@ def build_parser() -> argparse.ArgumentParser:
     nt.add_argument("--prune", action="store_true",
                     help="drop DHCP reservations for boxes that no longer exist")
     nt.set_defaults(func=cmd_net)
-    # Nested, and optional: bare `vm net` keeps meaning "ensure the management
+    # Nested, and optional: bare `vmorch net` keeps meaning "ensure the management
     # network", which is what it has always meant and what the docs reference.
     netsub = nt.add_subparsers(dest="netcmd")
 

@@ -120,7 +120,7 @@ def build(name: str, from_image: str | None = None,
     if boxes.exists(build_box):
         raise GoldenError(
             f"a previous build box {build_box!r} is still around; "
-            f"remove it with `vm rm {build_box}`"
+            f"remove it with `vmorch rm {build_box}`"
         )
 
     # The build box needs the internet -- that is the entire point, it is where
@@ -188,7 +188,7 @@ def build_from_box(name: str, source_box: str, keep_build_box: bool = False,
     src = boxes.load(source_box)
     if src.state == "running":
         raise GoldenError(
-            f"stop {source_box} first (`vm stop {source_box}`). Imaging a live "
+            f"stop {source_box} first (`vmorch stop {source_box}`). Imaging a live "
             "box captures whatever was mid-write."
         )
 
@@ -198,7 +198,7 @@ def build_from_box(name: str, source_box: str, keep_build_box: bool = False,
 
     build_box = f"{BUILD_PREFIX}{name}"[:28]
     if boxes.exists(build_box):
-        raise GoldenError(f"remove the leftover build box first: vm rm {build_box}")
+        raise GoldenError(f"remove the leftover build box first: vmorch rm {build_box}")
 
     # Flatten straight to the image's real path: the throwaway box below is
     # created *from* this image, so it has to be where the catalogue looks.
@@ -234,7 +234,7 @@ def build_from_box(name: str, source_box: str, keep_build_box: bool = False,
     except Exception:
         # A half-built image is worse than none: it boots, and every box made
         # from it shares an identity with the source. Leave nothing behind that
-        # `vm images` would offer.
+        # `vmorch images` would offer.
         dest.unlink(missing_ok=True)
         images.remove_from_catalogue(name)
         raise

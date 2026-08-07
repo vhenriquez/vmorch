@@ -109,7 +109,7 @@ def main() -> int:
 
     # The per-box filter is the one bound to nic0, and the per-net filters to
     # the local-net NICs. Arming only the three shared filters left those
-    # untouched on `vm start` and `vm reseed`, which is the same hole the
+    # untouched on `vmorch start` and `vmorch reseed`, which is the same hole the
     # original fix closed on the create path. Assert boxes.arm_filters reaches
     # all three kinds.
     arm_src = ast.get_source_segment(SRC, functions["arm_filters"]) or ""

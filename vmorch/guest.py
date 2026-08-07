@@ -34,8 +34,8 @@ def run(name: str, script: str, check: bool = True,
 
     Connects as **root over the tool's own key**, not as the agent user via
     sudo. That separation is the point: the agent's privileges can be reduced to
-    nothing (`agent_sudo = "none"`) without breaking `vm share`, `vm service` or
-    `vm golden`, because the tool never depended on the agent being root.
+    nothing (`agent_sudo = "none"`) without breaking `vmorch share`, `vmorch service` or
+    `vmorch golden`, because the tool never depended on the agent being root.
 
     Falls back to `agent` + sudo for boxes created before root access was
     provisioned -- cloud-init runs once, so an older box has no root key until
@@ -140,7 +140,7 @@ def configure_wan(name: str, wan_mac: str) -> str:
     and that is all it does. The guest's network config was written by
     cloud-init at first boot, when there was one NIC, and cloud-init does not
     run again -- so nothing in the guest knows the interface exists and it sits
-    there DOWN with no address while `vm apply` reports success.
+    there DOWN with no address while `vmorch apply` reports success.
 
     Deliberately writes the file and stops. It does *not* run `netplan apply`,
     because the caller restarts the box moments later and boot brings the
@@ -156,7 +156,7 @@ def configure_wan(name: str, wan_mac: str) -> str:
                check=False).strip().endswith("yes"):
         raise GuestError(
             f"{name} does not use netplan, so vmorch cannot configure its "
-            "internet NIC from here. Run `vm reseed " + name + "` instead: that "
+            "internet NIC from here. Run `vmorch reseed " + name + "` instead: that "
             "regenerates the seed and lets cloud-init write whatever the "
             "distro uses."
         )
@@ -301,7 +301,7 @@ def configure_nets(name: str, attachments: list[tuple[str, str, str]],
     better: a box can reach a peer the instant both are up, with no lease to
     wait for.
 
-    /24 is assumed, matching what `vm net create` hands out.
+    /24 is assumed, matching what `vmorch net create` hands out.
 
     Written whole every time and deleted when nothing is attached, so detaching
     a net actually removes its configuration instead of leaving an interface
@@ -376,7 +376,7 @@ def mount_folder(name: str, folder: Folder) -> None:
     mountpoint = f"/mnt/{folder.tag}"
     # The fstab line is REWRITTEN, not merely added when absent. Skipping an
     # existing line meant a mode change never reached the guest: flipping a
-    # folder from ro to rw in the spec and running `vm apply` reported success
+    # folder from ro to rw in the spec and running `vmorch apply` reported success
     # and left the old options in place, both in fstab and on the live mount.
     # A remount follows for the same reason.
     run(name, f"""set -e

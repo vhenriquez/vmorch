@@ -167,8 +167,8 @@ def arm_filters(box_spec: BoxSpec) -> None:
     That call covers the three *shared* filters. It does not cover the ones
     actually bound to the interfaces: nic0 references vmorch-box-<name>, and
     every local-net NIC references vmorch-net-<net>-<box>. Those were redefined
-    on create and apply -- which build them anyway -- but not on `vm start` or
-    `vm reseed`, so those two paths still started boxes whose own filters had
+    on create and apply -- which build them anyway -- but not on `vmorch start` or
+    `vmorch reseed`, so those two paths still started boxes whose own filters had
     not been touched. Same hole, on the paths the original fix did not reach.
 
     Everything a start needs is therefore defined here, in one place, and every
@@ -255,7 +255,7 @@ def _create_overlay(box_spec: BoxSpec, base: Path) -> Path:
 def create(box_spec: BoxSpec, start: bool = True) -> Box:
     if exists(box_spec.name):
         raise BoxError(
-            f"box {box_spec.name!r} already exists -- use `vm apply` to change it"
+            f"box {box_spec.name!r} already exists -- use `vmorch apply` to change it"
         )
     if virsh.domain_exists(box_spec.domain):
         raise BoxError(f"libvirt already has a domain named {box_spec.domain!r}")
@@ -534,7 +534,7 @@ def apply(name: str) -> Box:
         wan_note = (
             f"{name} is stopped, so its internet NIC could not be configured "
             "from here. If it comes up without an address, run "
-            f"`vm reseed {name}`."
+            f"`vmorch reseed {name}`."
         )
     elif _needs_wan_config(name, box.spec, was_running):
         try:
@@ -559,7 +559,7 @@ def apply(name: str) -> Box:
                 guest.mount_folder(name, folder)
             except guest.GuestError:
                 pass          # apply() reports the network note; a share that
-                              # cannot be remounted is recovered by `vm mount`
+                              # cannot be remounted is recovered by `vmorch mount`
 
     net_note = ""
     if was_running:
@@ -637,7 +637,7 @@ def destroy(name: str, keep_disk: bool = False) -> None:
         shutil.rmtree(box_dir(name), ignore_errors=True)
 
     services.delete_box_filter(name)
-    # Per-net filters too. A leftover blocks `vm net rm` on a network whose last
+    # Per-net filters too. A leftover blocks `vmorch net rm` on a network whose last
     # box is gone, and would be inherited by a box recreated under the same name
     # -- carrying a pinned address that may no longer be the one it is given.
     for net_name in box.spec.nets:
@@ -696,7 +696,7 @@ def share(name: str, host_path: Path, tag: str | None = None,
                                 live=True, persist=True)
         except virsh.VirshError as exc:
             # Undo the spec change. A grant recorded but not attached would
-            # show in `vm show` while doing nothing -- the same silent lie the
+            # show in `vmorch show` while doing nothing -- the same silent lie the
             # unimplemented service mechanisms used to tell.
             box.spec.folders = [f for f in box.spec.folders if f.tag != tag]
             save_spec(box.spec)
@@ -704,7 +704,7 @@ def share(name: str, host_path: Path, tag: str | None = None,
                 raise BoxError(
                     f"{name} has no free PCI slots for another share. Boxes "
                     "created before this was fixed have no spares; restart it "
-                    f"(`vm stop {name} && vm apply {name} && vm start {name}`) "
+                    f"(`vmorch stop {name} && vmorch apply {name} && vmorch start {name}`) "
                     "to pick up the extra ports."
                 ) from None
             raise
@@ -713,7 +713,7 @@ def share(name: str, host_path: Path, tag: str | None = None,
         except guest.GuestError as exc:
             raise BoxError(
                 f"{name}: the share is attached and saved, but mounting it "
-                f"inside the box failed ({exc}). Run `vm mount {name}` once the "
+                f"inside the box failed ({exc}). Run `vmorch mount {name}` once the "
                 "box is reachable."
             ) from None
     else:
@@ -761,7 +761,7 @@ def reseed(name: str) -> Box:
     virsh.run("start", box.spec.domain)
 
     # Reseeding relocks the account (the seed's runcmd does), so password mode
-    # has to be re-established afterwards or `vm password` prints a secret the
+    # has to be re-established afterwards or `vmorch password` prints a secret the
     # box no longer accepts.
     if box.spec.sudo == "password":
         _wait_reachable(name)
@@ -773,7 +773,7 @@ def set_sudo(name: str, mode: str) -> Box:
     """Change what the agent user may do with sudo.
 
     Only written to the spec here. The rule lives in a sudoers file that
-    cloud-init writes, and cloud-init runs once -- so this needs `vm reseed` to
+    cloud-init writes, and cloud-init runs once -- so this needs `vmorch reseed` to
     reach the box. Saying so is the caller's job.
     """
     box = load(name)
@@ -800,7 +800,7 @@ def sync_mounts(name: str) -> list[str]:
 
 def _virtual_size(disk: Path) -> int:
     # -U because a running box holds a write lock on its own disk, and without
-    # it qemu-img refuses to report anything at all -- which would make `vm disk`
+    # it qemu-img refuses to report anything at all -- which would make `vmorch disk`
     # work only on stopped boxes. Read-only inspection, so sharing is safe.
     info = json.loads(subprocess.run(
         ["qemu-img", "info", "-U", "--output=json", str(disk)],
@@ -820,7 +820,7 @@ def resize_disk(name: str, size: str) -> dict:
 
     1. the qcow2 active layer, so the virtual device is bigger;
     2. the guest's partition table and filesystem, or `df` is unchanged;
-    3. the spec, or the next `vm apply` reverts the box to its old size.
+    3. the spec, or the next `vmorch apply` reverts the box to its old size.
 
     **Growing only.** qcow2 can be shrunk, but only by discarding the tail of
     the device -- which is where the filesystem's data lives. There is no safe
@@ -891,7 +891,7 @@ def snapshot(name: str, label: str | None = None):
     box = load(name)
     if box.state == "running":
         raise BoxError(
-            f"stop {name} first: `vm stop {name}`. Snapshotting a running box "
+            f"stop {name} first: `vmorch stop {name}`. Snapshotting a running box "
             "means a crash-consistent image at best."
         )
     return snapshots.create(box_dir(name), disk_path(name), label)
@@ -900,8 +900,8 @@ def snapshot(name: str, label: str | None = None):
 def rollback(name: str, index: int):
     box = load(name)
     if box.state == "running":
-        raise BoxError(f"stop {name} first: `vm stop {name}`")
-    # Pass the spec size so rewinding past a `vm disk` does not quietly undo it.
+        raise BoxError(f"stop {name} first: `vmorch stop {name}`")
+    # Pass the spec size so rewinding past a `vmorch disk` does not quietly undo it.
     return snapshots.rollback(box_dir(name), disk_path(name), index,
                               size=box.spec.disk)
 
@@ -918,7 +918,7 @@ def grant_service(name: str, svc_name: str, host_port: int, guest_port: int,
         raise BoxError(f"box {name!r} already has service {svc_name!r}")
 
     # The spec models three mechanisms but only one is built. Accepting the
-    # others would record a grant in the spec, show it in `vm show`, and deliver
+    # others would record a grant in the spec, show it in `vmorch show`, and deliver
     # nothing -- a silent no-op is worse than a refusal.
     if via != "filter":
         raise BoxError(

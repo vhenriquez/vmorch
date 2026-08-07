@@ -23,7 +23,7 @@ from . import alloc, config
 from .cloudinit import SSH_KEY
 
 HEADER = """# Managed by vmorch -- this file is rewritten in full on every change.
-# Do not edit by hand; edit the box spec and run `vm apply <name>`.
+# Do not edit by hand; edit the box spec and run `vmorch apply <name>`.
 """
 
 
