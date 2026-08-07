@@ -6,8 +6,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import (audit, boxes, config, consoletext, golden, images, nets,
-               network, snapshots, spec as spec_mod, virsh)
+from . import (alloc, audit, boxes, config, consoletext, golden, guest, images,
+               nets, network, sizes, snapshots, spec as spec_mod, virsh)
 from .spec import BoxSpec
 
 
@@ -739,8 +739,9 @@ def build_parser() -> argparse.ArgumentParser:
     sv.add_argument("service", help="e.g. ollama")
     sv.add_argument("--host-port", type=int, required=True)
     sv.add_argument("--guest-port", type=int)
-    sv.add_argument("--via", default="filter",
-                    choices=sorted(spec_mod.VALID_VIA_FROM_HOST))
+    # Only the mechanism that is built. The spec models three; offering the
+    # other two here meant argparse accepted a value grant_service then refused.
+    sv.add_argument("--via", default="filter", choices=["filter"])
     sv.set_defaults(func=cmd_service)
 
     rv = sub.add_parser("revoke", help="revoke a granted service")
@@ -872,9 +873,14 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         args.func(args)
-    except (boxes.BoxError, golden.GoldenError, images.ImageError,
-            nets.NetError, spec_mod.SpecError, snapshots.SnapshotError,
+    except (alloc.AllocationError, boxes.BoxError, golden.GoldenError,
+            guest.GuestError, images.ImageError, nets.NetError,
+            sizes.SizeError, spec_mod.SpecError, snapshots.SnapshotError,
             virsh.VirshError) as exc:
+        # Every error the tool raises deliberately belongs here. Three were
+        # missing, so running out of addresses, losing ssh to a box, or
+        # mistyping a size printed a traceback in a tool that otherwise turns
+        # every failure into a sentence.
         _die(str(exc))
     return 0
 

@@ -75,7 +75,7 @@ def nat_bridge() -> str:
     return match.group(1)
 
 
-def _wan_filter_xml(allow_lan: bool) -> str:
+def _wan_filter_xml(allow_lan: bool, gw: str | None = None) -> str:
     """Filter for the internet NIC.
 
     With lan = false we drop RFC1918 and link-local destinations, so the box
@@ -89,7 +89,10 @@ def _wan_filter_xml(allow_lan: bool) -> str:
     left to anyone's memory.
     """
     name = "vmorch-wan-lan" if allow_lan else "vmorch-wan-nolan"
-    gw = nat_gateway()
+    # Discovered by default, injectable for tests. Reading it from libvirt is
+    # right at runtime and wrong in a unit test, which then needs a working
+    # libvirt to check the shape of a string.
+    gw = gw or nat_gateway()
 
     # DNS lockdown, on BOTH filters. Without it the query log is worth little:
     # a box can talk to 8.8.8.8:53 directly, or DNS-over-TLS on 853, and never

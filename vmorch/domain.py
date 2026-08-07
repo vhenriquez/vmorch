@@ -25,7 +25,7 @@ from __future__ import annotations
 from pathlib import Path
 from xml.sax.saxutils import quoteattr
 
-from . import config
+from . import config, sizes
 from .spec import BoxSpec
 
 
@@ -117,11 +117,12 @@ def _root_ports(count: int) -> str:
 
 
 def _memory_kib(memory: str) -> int:
-    text = memory.strip().upper()
-    multipliers = {"G": 1024 * 1024, "M": 1024, "K": 1}
-    if text and text[-1] in multipliers:
-        return int(float(text[:-1]) * multipliers[text[-1]])
-    return int(float(text)) * 1024 * 1024      # bare number means GiB
+    """Memory as KiB, through the one shared size parser.
+
+    This used to carry its own unit table, which had no T -- so the same string
+    was a valid disk size and a traceback as a memory size.
+    """
+    return sizes.parse(memory) // 1024
 
 
 def filesystem_device_xml(folder) -> str:

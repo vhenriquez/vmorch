@@ -207,7 +207,7 @@ def available() -> dict[str, bool]:
 # Tier 2: the nftables ruleset. Needs root once; everything above does not.
 # --------------------------------------------------------------------------
 
-def _localnet_rules() -> str:
+def _localnet_rules(bridges: list[str] | None = None) -> str:
     """One logging rule per local-net bridge, or a note saying there are none.
 
     Read from the net definitions rather than guessed: the bridge name is
@@ -215,20 +215,22 @@ def _localnet_rules() -> str:
     not error -- it silently matches nothing, which is the worst way for an
     audit trail to fail.
     """
-    try:
-        from . import nets
-        defined = nets.list_nets()
-    except Exception:                                     # noqa: BLE001
-        defined = []
-    if not defined:
+    if bridges is None:
+        try:
+            from . import nets
+            bridges = [n.bridge for n in nets.list_nets()]
+        except Exception:                                 # noqa: BLE001
+            bridges = []
+    if not bridges:
         return "        # (no local networks defined)"
     return "\n".join(
-        f'        iifname "{net.bridge}" ct state new \\\n'
+        f'        iifname "{bridge}" ct state new \\\n'
         f'            log prefix "{LOG_PREFIX}-localnet " level info'
-        for net in defined)
+        for bridge in bridges)
 
 
-def nft_ruleset(nat_gw: str | None = None, nat_br: str | None = None) -> str:
+def nft_ruleset(nat_gw: str | None = None, nat_br: str | None = None,
+                localnet_bridges: list[str] | None = None) -> str:
     """Logging rules for the box bridges.
 
     A separate table at a priority ahead of libvirt's own, doing nothing but
@@ -269,7 +271,7 @@ table inet vmorch_audit {{
             log prefix "{LOG_PREFIX}-allow " level info
         iifname "{nat_br}" ct state new \\
             log prefix "{LOG_PREFIX}-allow " level info
-{_localnet_rules()}
+{_localnet_rules(localnet_bridges)}
 
         # What the guest is forbidden to reach. These duplicate the nwfilter
         # decisions purely so the attempt is recorded -- in a default-deny

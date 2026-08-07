@@ -206,7 +206,8 @@ def _parse_mode(raw: object, tag: str) -> str:
     if not isinstance(raw, str) or raw.strip().lower() not in VALID_MODES:
         raise SpecError(
             f"folder {tag!r}: mode must be 'ro' or 'rw', got {raw!r}. "
-            "Treating as 'ro'."
+            "Refused rather than assumed: a spec that meant to grant rw and "
+            "fumbled it should not become a silent read-only surprise."
         )
     return raw.strip().lower()
 

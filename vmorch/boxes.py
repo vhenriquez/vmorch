@@ -18,8 +18,8 @@ from datetime import datetime
 from pathlib import Path
 
 from . import (alloc, cloudinit, config, domain, guest, hostaccess, images,
-               nets as netlib, network, services, snapshots, spec as spec_mod,
-               sshconf, virsh)
+               nets as netlib, network, services, sizes, snapshots,
+               spec as spec_mod, sshconf, virsh)
 from .spec import BoxSpec
 
 
@@ -203,12 +203,9 @@ def _graceful_restart_stop(name: str, timeout: int = 90) -> None:
     virsh.run("destroy", domain, check=False)
 
 
-def _bytes_of(size: str) -> int:
-    text = size.strip().upper()
-    units = {"G": 1024 ** 3, "M": 1024 ** 2, "K": 1024, "T": 1024 ** 4}
-    if text and text[-1] in units:
-        return int(float(text[:-1]) * units[text[-1]])
-    return int(float(text)) * 1024 ** 3
+#: Kept as thin aliases so call sites read the same as before; the one
+#: implementation lives in sizes.py.
+_bytes_of = sizes.parse
 
 
 def _check_disk_fits(box_spec: BoxSpec, base: Path) -> None:
@@ -812,11 +809,7 @@ def _virtual_size(disk: Path) -> int:
     return int(info["virtual-size"])
 
 
-def _format_size(size_bytes: int) -> str:
-    """Render bytes back as a spec-friendly string, preferring whole GB."""
-    if size_bytes % 1024 ** 3 == 0:
-        return f"{size_bytes // 1024 ** 3}G"
-    return f"{size_bytes / 1024 ** 3:.1f}G"
+_format_size = sizes.render
 
 
 def resize_disk(name: str, size: str) -> dict:
@@ -850,7 +843,7 @@ def resize_disk(name: str, size: str) -> dict:
     try:
         target = current + _bytes_of(text[1:]) if text.startswith("+") \
             else _bytes_of(text)
-    except (ValueError, IndexError) as exc:
+    except (sizes.SizeError, IndexError) as exc:
         raise BoxError(
             f"cannot read size {size!r}: use e.g. 60G, or +20G to add to the "
             "current size"

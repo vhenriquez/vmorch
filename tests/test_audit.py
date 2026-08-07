@@ -75,9 +75,25 @@ def main() -> int:
         failures += 0 if ok else 1
 
     # The generated ruleset must name the NAT resolver, not the management one.
-    rules = audit.nft_ruleset(nat_gw="192.168.122.1")
+    # Every input injected, so this needs no libvirt: a wrong bridge name in an
+    # nft rule does not fail, it silently matches nothing, which is exactly the
+    # kind of thing a test should be able to check anywhere.
+    rules = audit.nft_ruleset(nat_gw="192.168.122.1", nat_br="virbr0",
+                              localnet_bridges=["virbr-lab"])
     ok = "!= 192.168.122.1" in rules
     print(f"  {'ok  ' if ok else 'FAIL'} DNS rule names the NAT resolver")
+    failures += 0 if ok else 1
+
+    # Local nets carry the only box-to-box traffic there is, plus whatever a
+    # router box forwards for its peers. Leaving them out made the audit silent
+    # about both.
+    ok = 'iifname "virbr-lab"' in rules
+    print(f"  {'ok  ' if ok else 'FAIL'} local net bridges are logged")
+    failures += 0 if ok else 1
+
+    ok = "(no local networks defined)" in audit.nft_ruleset(
+        nat_gw="192.168.122.1", nat_br="virbr0", localnet_bridges=[])
+    print(f"  {'ok  ' if ok else 'FAIL'} says so when there are no local nets")
     failures += 0 if ok else 1
 
     print("FAILED" if failures else "audit parsing is correct")

@@ -47,8 +47,11 @@ def documents():
 
     yield "mgmt-network", network.MGMT_NET_XML
     yield "mgmt-filter", network.MGMT_FILTER_XML
-    yield "wan-lan", network._wan_filter_xml(allow_lan=True)
-    yield "wan-nolan", network._wan_filter_xml(allow_lan=False)
+    # Gateway injected, not discovered: this test checks that the documents we
+    # hand libvirt are well-formed, which must not require a running libvirt.
+    yield "wan-lan", network._wan_filter_xml(allow_lan=True, gw="192.168.122.1")
+    yield "wan-nolan", network._wan_filter_xml(allow_lan=False,
+                                               gw="192.168.122.1")
 
 
 def main() -> int:
