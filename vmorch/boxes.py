@@ -552,6 +552,18 @@ def apply(name: str) -> Box:
     # Local nets, same rules: written before the restart, over ssh, and rewritten
     # whole so detaching removes the stanza rather than orphaning an interface
     # the guest keeps trying to raise.
+    # Folder modes, before the restart and while ssh still works. The domain
+    # XML carries <readonly/> either way, but a live box keeps the device it
+    # was given, so without this a ro->rw change is a silent no-op until the
+    # next boot -- and the guest's own mount options never change at all.
+    if was_running:
+        for folder in box.spec.folders:
+            try:
+                guest.mount_folder(name, folder)
+            except guest.GuestError:
+                pass          # apply() reports the network note; a share that
+                              # cannot be remounted is recovered by `vm mount`
+
     net_note = ""
     if was_running:
         try:

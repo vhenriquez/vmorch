@@ -306,18 +306,33 @@ def catalogue(include_hidden: bool = False) -> dict[str, CatalogueEntry]:
     return {k: v for k, v in entries.items() if not v.hidden}
 
 
-def register_local(key: str, description: str) -> None:
-    """Record a locally built golden image in the user catalogue."""
+def register_local(key: str, description: str, replace: bool = False) -> None:
+    """Record a locally built golden image in the user catalogue.
+
+    `replace` rewrites an entry that is already there. `vm golden --from-box`
+    registers a provisional entry before it can build (the throwaway box is
+    created *from* this image, so the catalogue has to know it first) and needs
+    to correct the description once the image is real -- without it the
+    "(building)" note would be permanent.
+
+    The table header goes through _table_name so a key containing a dot is
+    quoted: a bare [my.image] declares table "image" nested inside "my", and the
+    entry silently comes back under the wrong name with everything else lost.
+    """
     USER_CATALOGUE.parent.mkdir(parents=True, exist_ok=True)
     if not USER_CATALOGUE.exists():
         USER_CATALOGUE.write_text(EXAMPLE_USER_CATALOGUE)
 
+    if _has_block(key):
+        if not replace:
+            return                                    # already registered
+        remove_from_catalogue(key)
+
     text = USER_CATALOGUE.read_text()
-    if f"\n[{key}]" in text or text.startswith(f"[{key}]"):
-        return                                        # already registered
     USER_CATALOGUE.write_text(
         text.rstrip("\n")
-        + f'\n\n[{key}]\ndescription = "{description}"\nlocal = true\n'
+        + f"\n\n{_table_name(key)}\ndescription = {_toml_value(description)}"
+        + "\nlocal = true\n"
     )
 
 

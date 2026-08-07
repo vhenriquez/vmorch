@@ -270,7 +270,12 @@ WantedBy=multi-user.target
 UNIT
 
 systemctl daemon-reload
-systemctl enable --now vmorch-router.service
+systemctl enable vmorch-router.service
+# restart, not `enable --now`: the unit is Type=oneshot with RemainAfterExit,
+# so once it is active `--now` does nothing at all. Changing which subnets a
+# router fronts wrote a new ruleset and never loaded it -- the box kept
+# masquerading for the old list until someone rebooted it.
+systemctl restart vmorch-router.service
 echo "routing for {' '.join(subnets)}"
 """
 
@@ -369,11 +374,22 @@ def mount_folder(name: str, folder: Folder) -> None:
     """
     opts = "ro" if folder.readonly else "rw"
     mountpoint = f"/mnt/{folder.tag}"
+    # The fstab line is REWRITTEN, not merely added when absent. Skipping an
+    # existing line meant a mode change never reached the guest: flipping a
+    # folder from ro to rw in the spec and running `vm apply` reported success
+    # and left the old options in place, both in fstab and on the live mount.
+    # A remount follows for the same reason.
     run(name, f"""set -e
 mkdir -p {mountpoint}
-grep -q ' {mountpoint} virtiofs ' /etc/fstab || \
-  echo '{folder.tag} {mountpoint} virtiofs defaults,{opts},nofail 0 0' >> /etc/fstab
-mountpoint -q {mountpoint} || mount {mountpoint}
+sed -i '\\| {mountpoint} virtiofs |d' /etc/fstab
+echo '{folder.tag} {mountpoint} virtiofs defaults,{opts},nofail 0 0' >> /etc/fstab
+if mountpoint -q {mountpoint}; then
+    mount -o remount,{opts} {mountpoint} 2>/dev/null || {{
+        umount {mountpoint} && mount {mountpoint}
+    }}
+else
+    mount {mountpoint}
+fi
 """)
 
 

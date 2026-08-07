@@ -190,10 +190,13 @@ def collect(since: str = "-24h", box: str | None = None,
 
 def available() -> dict[str, bool]:
     """Which streams are actually running, so the reader can say what is missing."""
+    # BOTH networks, not just the management one. An internet-enabled box asks
+    # the NAT network's resolver, so checking only MGMT_NET reported logging as
+    # on while every lookup from an internet box went unrecorded.
     dns_on = False
     try:
-        xml = virsh.run("net-dumpxml", "--inactive", config.MGMT_NET)
-        dns_on = "log-queries" in xml
+        dns_on = all("log-queries" in virsh.run("net-dumpxml", "--inactive", n)
+                     for n in (config.MGMT_NET, config.NAT_NET))
     except virsh.VirshError:
         pass
     conn_on = bool(_journal("-7d", ["-k", "-g", LOG_PREFIX, "-n", "1"]))
@@ -203,6 +206,27 @@ def available() -> dict[str, bool]:
 # --------------------------------------------------------------------------
 # Tier 2: the nftables ruleset. Needs root once; everything above does not.
 # --------------------------------------------------------------------------
+
+def _localnet_rules() -> str:
+    """One logging rule per local-net bridge, or a note saying there are none.
+
+    Read from the net definitions rather than guessed: the bridge name is
+    derived from the net's name, and a wrong interface name in an nft rule does
+    not error -- it silently matches nothing, which is the worst way for an
+    audit trail to fail.
+    """
+    try:
+        from . import nets
+        defined = nets.list_nets()
+    except Exception:                                     # noqa: BLE001
+        defined = []
+    if not defined:
+        return "        # (no local networks defined)"
+    return "\n".join(
+        f'        iifname "{net.bridge}" ct state new \\\n'
+        f'            log prefix "{LOG_PREFIX}-localnet " level info'
+        for net in defined)
+
 
 def nft_ruleset(nat_gw: str | None = None, nat_br: str | None = None) -> str:
     """Logging rules for the box bridges.
@@ -237,11 +261,15 @@ table inet vmorch_audit {{
     chain observe {{
         type filter hook forward priority -150; policy accept;
 
-        # New flows leaving a box, on either bridge.
+        # New flows leaving a box, on every bridge a box can be on.
+        # Local nets are included: they are the one place box-to-box traffic is
+        # allowed, and a router box forwards its peers' traffic there. Logging
+        # only the management and NAT bridges left both invisible.
         iifname "{config.MGMT_BRIDGE}" ct state new \\
             log prefix "{LOG_PREFIX}-allow " level info
         iifname "{nat_br}" ct state new \\
             log prefix "{LOG_PREFIX}-allow " level info
+{_localnet_rules()}
 
         # What the guest is forbidden to reach. These duplicate the nwfilter
         # decisions purely so the attempt is recorded -- in a default-deny

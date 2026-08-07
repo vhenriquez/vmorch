@@ -207,8 +207,15 @@ def build_from_box(name: str, source_box: str, keep_build_box: bool = False,
     progress(f"flattening {source_box}")
     _flatten(boxes.disk_path(source_box), dest)
 
+    # Registered before the throwaway box, because that box is created *from*
+    # this image and boxes.create resolves it through the catalogue. The entry
+    # is provisional until the generalize pass below succeeds -- see the
+    # rollback in the except clause, without which a failure here left a
+    # registered image that was a straight flatten of the source box, carrying
+    # its machine-id and its ssh host keys. Cloning those is the one thing this
+    # function exists to prevent.
+    images.register_local(name, f"built by hand from {source_box} (building)")
     try:
-        images.register_local(name, f"built by hand from {source_box}")
         progress("booting a throwaway copy to generalize it")
         spec = BoxSpec(name=build_box, image=name, internet=False,
                        memory=src.spec.memory, disk=src.spec.disk)
@@ -224,6 +231,13 @@ def build_from_box(name: str, source_box: str, keep_build_box: bool = False,
 
         progress("flattening image")
         _flatten(boxes.disk_path(build_box), dest)
+    except Exception:
+        # A half-built image is worse than none: it boots, and every box made
+        # from it shares an identity with the source. Leave nothing behind that
+        # `vm images` would offer.
+        dest.unlink(missing_ok=True)
+        images.remove_from_catalogue(name)
+        raise
     finally:
         if not keep_build_box and boxes.exists(build_box):
             progress("removing throwaway box")
@@ -232,6 +246,8 @@ def build_from_box(name: str, source_box: str, keep_build_box: bool = False,
             except Exception:                          # noqa: BLE001
                 pass
 
+    # Rewrites the provisional entry now that the image is actually usable.
+    images.register_local(name, f"built by hand from {source_box}", replace=True)
     progress(f"registered as image {name!r}")
     return dest
 

@@ -245,7 +245,14 @@ def remove(name: str, attached: list[str]) -> None:
 
 
 def box_filter_name(net: str, box: str) -> str:
-    return f"vmorch-net-{net}-{box}"
+    """Filter name for one box's NIC on one net.
+
+    Two components joined by a separator neither may contain. With a hyphen,
+    net "lab" + box "a-b" and net "lab-a" + box "b" produced the same name, so
+    two boxes shared one filter and one of them got the other's pinned address
+    -- silently defeating the anti-spoofing this filter exists for.
+    """
+    return f"vmorch-net-{net}--{box}"
 
 
 def box_filter_xml(net: LocalNet, box: str, router: bool = False) -> str:

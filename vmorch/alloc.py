@@ -26,10 +26,38 @@ recycled address points at a ghost.
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
+import os
 from dataclasses import asdict, dataclass
 
 from . import config
+
+
+@contextlib.contextmanager
+def _locked():
+    """Hold an exclusive lock over the ledger for a read-modify-write.
+
+    allocate() reads the file, picks the first free octet and CID, and writes
+    the result back. The TUI and the CLI are separate processes and the TUI
+    polls on a timer, so two `vm new` runs could interleave and hand the same
+    address -- and the same vsock CID -- to two boxes. A CID handed out twice is
+    the one thing this module says must never happen, because a stale host-side
+    relay would then serve the wrong box.
+
+    A sidecar lock file rather than the ledger itself: the ledger is replaced by
+    rename, so a lock held on it would be a lock on an unlinked inode.
+    """
+    config.ALLOC_FILE.parent.mkdir(parents=True, exist_ok=True)
+    lock = config.ALLOC_FILE.with_suffix(".json.lock")
+    fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 @dataclass
@@ -96,6 +124,11 @@ def allocate(name: str) -> Allocation:
     tombstoned entry: recreating `agent-alpha` gets `agent-alpha`'s old address
     back, which is exactly what makes the ssh config entry keep working.
     """
+    with _locked():
+        return _allocate_locked(name)
+
+
+def _allocate_locked(name: str) -> Allocation:
     data = _load()
     allocations = data["allocations"]
 
@@ -163,9 +196,10 @@ def release(name: str) -> None:
     nothing fresh is left -- see `allocate`.
     """
     from datetime import datetime
-    data = _load()
-    if name in data["allocations"]:
-        data["allocations"][name]["released"] = True
-        data["allocations"][name]["released_at"] = datetime.now().isoformat(
-            timespec="seconds")
-        _save(data)
+    with _locked():
+        data = _load()
+        if name in data["allocations"]:
+            data["allocations"][name]["released"] = True
+            data["allocations"][name]["released_at"] = datetime.now().isoformat(
+                timespec="seconds")
+            _save(data)
