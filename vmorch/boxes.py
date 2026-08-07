@@ -624,7 +624,13 @@ def stop(name: str, force: bool = False) -> None:
 def destroy(name: str, keep_disk: bool = False) -> None:
     """Remove a box, and everything the host was holding for it."""
     box = load(name)
-    allocation = alloc.allocate(name)
+    # `get`, not `allocate`: a cleanup path must read the record, never make
+    # one. allocate() re-issues an address whose subnet no longer matches the
+    # config, so calling it here handed destroy a *fresh* mac and ip and it
+    # then tried to release a reservation that had never existed -- aborting
+    # part-way and leaving both the stale reservation and a new, unreleased
+    # ledger entry behind.
+    allocation = alloc.get(name)
 
     if virsh.domain_exists(box.spec.domain):
         if virsh.domain_state(box.spec.domain) == "running":
@@ -642,7 +648,11 @@ def destroy(name: str, keep_disk: bool = False) -> None:
     # -- carrying a pinned address that may no longer be the one it is given.
     for net_name in box.spec.nets:
         netlib.delete_box_filter(net_name, name)
-    network.unreserve_address(name, allocation.mac, box.ip)
+    # A box with no ledger entry is already half-gone; carry on cleaning up the
+    # rest rather than refusing to finish.
+    if allocation is not None:
+        network.unreserve_address(name, allocation.mac, allocation.ip)
+    network.unreserve_by_name(name)
     alloc.release(name)
     _regenerate_ssh()
 

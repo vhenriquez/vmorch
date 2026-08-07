@@ -117,12 +117,38 @@ def _mac_for(ip_last_octet: int) -> str:
     return f"52:54:00:6d:01:{ip_last_octet:02x}"
 
 
+def _in_mgmt_subnet(ip: str) -> bool:
+    """True if this address is on the management subnet as configured now.
+
+    Ledger entries outlive configuration changes, so an address recorded under
+    an older `mgmt_subnet` is still sitting there long after nothing serves it.
+    """
+    import ipaddress
+    try:
+        return (ipaddress.ip_address(ip)
+                in ipaddress.ip_network(config.MGMT_SUBNET, strict=False))
+    except ValueError:
+        return False
+
+
+def stale_allocations() -> list[Allocation]:
+    """Every recorded address that is no longer on the management subnet.
+
+    Reported rather than silently repaired where it is user-visible: these are
+    boxes that will not answer to their own name until they are recreated.
+    """
+    return [a for a in all_allocations() if not _in_mgmt_subnet(a.ip)]
+
+
 def allocate(name: str) -> Allocation:
     """Return this box's identifiers, creating them on first call.
 
     Re-allocating an existing name returns the original values, including for a
     tombstoned entry: recreating `agent-alpha` gets `agent-alpha`'s old address
     back, which is exactly what makes the ssh config entry keep working.
+
+    The one exception is an address on a subnet this host no longer serves --
+    see `_allocate_locked`.
     """
     with _locked():
         return _allocate_locked(name)
@@ -134,14 +160,30 @@ def _allocate_locked(name: str) -> Allocation:
 
     if name in allocations:
         existing = Allocation(**allocations[name])
-        if existing.released:
-            existing.released = False
-            allocations[name] = asdict(existing)
-            _save(data)
-        return existing
+        # ...unless it is no longer an address this host serves. Reusing a name
+        # normally returns its old address on purpose, so a rebuilt box keeps
+        # working. But if `mgmt_subnet` has changed since, that address is on a
+        # network nothing routes: the box comes up on some other lease and
+        # `ssh <name>` times out.
+        #
+        # Destroying the box does not clear it either -- release() tombstones
+        # rather than deletes, which is what makes the address stable in the
+        # first place. So recreating under the same name resurrects the broken
+        # address, and no amount of destroy-and-retry escapes it. Observed
+        # exactly that: a `test` box destroyed and recreated came back on the
+        # same stale 10.150.0.49 twice.
+        if _in_mgmt_subnet(existing.ip):
+            if existing.released:
+                existing.released = False
+                allocations[name] = asdict(existing)
+                _save(data)
+            return existing
+        # Drop it and fall through to a fresh address on the current subnet.
+        del allocations[name]
 
     used_octets = {
         int(e["ip"].rsplit(".", 1)[1]) for e in allocations.values()
+        if _in_mgmt_subnet(e["ip"])
     }
     used_cids = {int(e["cid"]) for e in allocations.values()}
 

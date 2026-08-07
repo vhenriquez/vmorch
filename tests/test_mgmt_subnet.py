@@ -117,6 +117,64 @@ def main() -> int:
     finally:
         virsh.run, config.MGMT_SUBNET = real_run, real_subnet
 
+    # --- the ledger, not just the network --------------------------------
+    #
+    # Guarding the network alone was not enough. release() tombstones rather
+    # than deletes, on purpose, so a rebuilt box keeps its address -- which
+    # means an address recorded under an older subnet comes BACK every time the
+    # name is reused. Destroying and recreating did not escape it: `test` was
+    # recreated onto the same dead 10.150.0.49 twice.
+    import json
+    import tempfile
+    from vmorch import alloc
+
+    saved_file = config.ALLOC_FILE
+    tmp = Path(tempfile.mkdtemp()) / "allocations.json"
+    config.ALLOC_FILE = tmp
+    config.MGMT_SUBNET = "192.168.150.0/24"
+    config.MGMT_GATEWAY = "192.168.150.1"
+    try:
+        tmp.write_text(json.dumps({"allocations": {
+            "stale": {"name": "stale", "ip": "10.150.0.49",
+                      "mac": "52:54:00:6d:01:31", "cid": 139,
+                      "released": True, "released_at": "2026-08-07T22:55:51"},
+            "good": {"name": "good", "ip": "192.168.150.33",
+                     "mac": "52:54:00:6d:01:21", "cid": 123, "released": False},
+        }}))
+
+        failures += check("a stale allocation is spotted",
+                          [a.name for a in alloc.stale_allocations()] == ["stale"])
+
+        fresh = alloc.allocate("stale")
+        failures += check("reusing the name does NOT return the dead address",
+                          fresh.ip != "10.150.0.49", fresh.ip)
+        failures += check("...it returns one on the current subnet",
+                          fresh.ip.startswith("192.168.150."), fresh.ip)
+        failures += check("...and the MAC follows the new address",
+                          fresh.mac.endswith(f"{int(fresh.ip.rsplit('.',1)[1]):02x}"),
+                          fresh.mac)
+        failures += check("a good allocation is still returned unchanged",
+                          alloc.allocate("good").ip == "192.168.150.33")
+        failures += check("no stale entries remain afterwards",
+                          alloc.stale_allocations() == [])
+
+        # A cleanup path must never mint a record. destroy() called allocate()
+        # to learn what to release; once allocate started re-issuing stale
+        # entries it handed destroy a fresh mac and ip, which it then failed to
+        # unreserve -- aborting part-way and leaving both the old reservation
+        # and a new unreleased entry behind.
+        src = (ROOT / "vmorch" / "boxes.py").read_text()
+        body = src[src.index("def destroy("):src.index("def _wait_reachable")]
+        failures += check("destroy() reads the allocation, never creates one",
+                          "alloc.allocate(" not in body,
+                          "destroy must use alloc.get()")
+        failures += check("destroy() also clears reservations by name",
+                          "unreserve_by_name" in body,
+                          "a reservation written under an older subnet does not "
+                          "match a delete built from the current allocation")
+    finally:
+        config.ALLOC_FILE = saved_file
+
     print("FAILED" if failures else "a changed mgmt_subnet is caught")
     return 1 if failures else 0
 

@@ -456,6 +456,36 @@ def unreserve_address(name: str, mac: str, ip: str) -> None:
             raise
 
 
+def unreserve_by_name(name: str) -> list[str]:
+    """Drop every reservation carrying this box's name, whatever its address.
+
+    The by-value delete needs the exact mac and ip. That is fine while the
+    ledger and the network agree -- and useless when they do not, which is
+    precisely when a leftover matters. A reservation written under an older
+    `mgmt_subnet` is invisible to a delete built from the current allocation,
+    so it survives the box and then blocks the name being reused cleanly.
+
+    Returns the addresses removed, so a caller can say what it tidied.
+    """
+    try:
+        xml = virsh.run("net-dumpxml", config.MGMT_NET)
+    except virsh.VirshError:
+        return []
+    removed = []
+    for mac, host, ip in re.findall(
+            r"<host mac='([^']+)' name='([^']+)' ip='([^']+)'/>", xml):
+        if host != name:
+            continue
+        try:
+            virsh.run("net-update", config.MGMT_NET, "delete", "ip-dhcp-host",
+                      f"<host mac='{mac}' name='{host}' ip='{ip}'/>",
+                      "--live", "--config", "--parent-index", "0")
+            removed.append(ip)
+        except virsh.VirshError:
+            continue
+    return removed
+
+
 def prune_reservations(live_names: set[str]) -> list[str]:
     """Remove reservations for boxes that no longer exist. Returns what went."""
     import re as _re
