@@ -20,8 +20,8 @@ from vmorch import audit  # noqa: E402
 DNS_QUERIES = [
     ("dnsmasq[4557]: query[A] github.com from 192.168.122.64",
      "A", "github.com", "192.168.122.64"),
-    ("dnsmasq[4557]: query[AAAA] deb.debian.org from 192.168.150.23",
-     "AAAA", "deb.debian.org", "192.168.150.23"),
+    ("dnsmasq[4557]: query[AAAA] deb.debian.org from 10.150.0.23",
+     "AAAA", "deb.debian.org", "10.150.0.23"),
     ("dnsmasq[900]: query[PTR] 1.122.168.192.in-addr.arpa from 192.168.122.5",
      "PTR", "1.122.168.192.in-addr.arpa", "192.168.122.5"),
 ]

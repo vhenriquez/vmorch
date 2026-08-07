@@ -22,7 +22,7 @@ a local net is the considered opt-out of it -- on its own NIC, leaving the other
 two untouched. Joining a net can never weaken what a box already had.
 
 **Addresses are deterministic.** A box's host octet on every local net is the
-same as its management octet, so `dev` at 192.168.150.33 is .33 on every net it
+same as its management octet, so `dev` at 10.150.0.33 is .33 on every net it
 joins. No second allocator, no collisions -- the management allocation is already
 unique per box -- and an address you can work out rather than look up.
 """
@@ -41,6 +41,24 @@ from . import alloc, config, virsh
 NAME_MAX = 9
 _NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 
+#: Middle MAC byte for a local-net NIC: 0x01 is management, 0x02 is internet.
+NET_MAC_BASE = 0x10
+#: Highest usable index, so NET_MAC_BASE + index still fits in one byte.
+MAX_NET_INDEX = 0xFF - NET_MAC_BASE
+
+
+def pool_capacity(pool: str = "") -> int:
+    """How many /24s the configured pool actually holds.
+
+    The prefix length used to be ignored entirely: a /20 holds 16 subnets, but
+    the allocator counted to 255 and happily handed out addresses well outside
+    the range it had been told to use -- potentially landing on the host's real
+    LAN, which is the one thing choosing a pool is meant to prevent.
+    """
+    pool = pool or config.LOCALNET_POOL
+    bits = int(pool.split("/")[1])
+    return max(0, min(1 << max(0, 24 - bits), MAX_NET_INDEX + 1))
+
 
 class NetError(RuntimeError):
     pass
@@ -50,7 +68,7 @@ class NetError(RuntimeError):
 class LocalNet:
     name: str
     index: int          # position in the pool; fixes the subnet and the MACs
-    subnet: str         # e.g. "192.168.160.0/24"
+    subnet: str         # e.g. "10.150.16.0/24"
 
     @property
     def libvirt_name(self) -> str:
@@ -62,7 +80,7 @@ class LocalNet:
 
     @property
     def prefix(self) -> str:
-        """The first three octets, e.g. "192.168.160"."""
+        """The first three octets, e.g. "10.150.16"."""
         return self.subnet.split("/")[0].rsplit(".", 1)[0]
 
     def address(self, box: str) -> str:
@@ -75,10 +93,12 @@ class LocalNet:
 
         Same derivation as the management and internet MACs -- the box's octet
         in the last byte, the NIC's role in the one before. Nets start at 0x10
-        so they can never collide with 0x01 (management) or 0x02 (internet).
+        so they can never collide with 0x01 (management) or 0x02 (internet),
+        which caps the index at MAX_NET_INDEX: past it the middle byte needs
+        three hex digits and the MAC is silently malformed rather than rejected.
         """
         octet = int(alloc.allocate(box).ip.rsplit(".", 1)[1])
-        return f"52:54:00:6d:{0x10 + self.index:02x}:{octet:02x}"
+        return f"52:54:00:6d:{NET_MAC_BASE + self.index:02x}:{octet:02x}"
 
 
 NETS_FILE = config.STATE_DIR / "nets.toml"
@@ -166,14 +186,17 @@ def create(name: str, subnet: str | None = None) -> LocalNet:
     if name in nets:
         raise NetError(f"local network {name!r} already exists")
 
-    index = next(i for i in range(256) if i not in {n.index for n in nets.values()})
+    capacity = pool_capacity()
+    taken = {n.index for n in nets.values()}
+    index = next((i for i in range(capacity) if i not in taken), None)
+    if index is None:
+        raise NetError(
+            f"no free subnet left in {config.LOCALNET_POOL}: it holds "
+            f"{capacity} network(s) and all are in use. Widen localnet_pool in "
+            f"{config.CONFIG_FILE}, or remove a network with `vm net rm`.")
     if subnet is None:
         base = config.LOCALNET_POOL.split("/")[0].rsplit(".", 2)[0]
         third = int(config.LOCALNET_POOL.split("/")[0].rsplit(".", 2)[1]) + index
-        if third > 255:
-            raise NetError(
-                f"no free subnet left in {config.LOCALNET_POOL}. Widen "
-                f"localnet_pool in {config.CONFIG_FILE}, or remove a network.")
         subnet = f"{base}.{third}.0/24"
 
     net = LocalNet(name=name, index=index, subnet=subnet)

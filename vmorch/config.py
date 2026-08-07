@@ -53,19 +53,60 @@ LIBVIRT_URI = "qemu:///system"
 
 # --- management network ------------------------------------------------------
 
-# 192.168.150.0/24 was verified free: the LAN is 192.168.1.0/24, and the host
-# also carries 192.168.4.0/24 and libvirt's default 192.168.122.0/24.
+# Defaults sit in 10.0.0.0/8 rather than 192.168/16, because home and office
+# LANs overwhelmingly live in the latter and libvirt's own default network is
+# already at 192.168.122.0/24. A clash here is not cosmetic: the management
+# network is what `ssh <box>` uses, so it must not collide with a route the host
+# already has.
+#
+# Check yours with `ip route` before changing these, and change them only BEFORE
+# creating any box -- existing boxes hold reserved addresses on the old subnet.
 MGMT_NET = "vmorch-mgmt"
 MGMT_BRIDGE = "virbr-vmorch"          # 12 chars, under the 15-char IFNAMSIZ limit
-MGMT_SUBNET = _value("mgmt_subnet", "192.168.150.0/24")
-MGMT_GATEWAY = _value("mgmt_gateway", "192.168.150.1")
-MGMT_NETMASK = "255.255.255.0"
-MGMT_DHCP_START = "192.168.150.10"
-MGMT_DHCP_END = "192.168.150.254"
+MGMT_SUBNET = _value("mgmt_subnet", "10.150.0.0/24")
+MGMT_GATEWAY = _value("mgmt_gateway", "10.150.0.1")
+
+
+def _netmask(cidr: str) -> str:
+    """Dotted netmask for a CIDR. Derived, never assumed.
+
+    MGMT_SUBNET is configurable, so a hardcoded 255.255.255.0 silently produced
+    a network that disagreed with its own address range the moment anyone used
+    a prefix other than /24.
+    """
+    bits = int(cidr.split("/")[1])
+    packed = ((1 << bits) - 1) << (32 - bits)
+    return ".".join(str((packed >> shift) & 0xFF) for shift in (24, 16, 8, 0))
+
+
+def _host_range(cidr: str, first: int, last: int) -> tuple[str, str]:
+    """(first, last) usable host address in `cidr`, clamped to the prefix.
+
+    The DHCP range used to be three literal 10.150.0.x strings next to a
+    configurable subnet. Overriding mgmt_subnet therefore emitted a <range>
+    outside its own <ip>, which libvirt rejects outright -- so a documented
+    config key could not actually be used.
+    """
+    base = [int(o) for o in cidr.split("/")[0].split(".")]
+    bits = int(cidr.split("/")[1])
+    net = (base[0] << 24) | (base[1] << 16) | (base[2] << 8) | base[3]
+    net &= ((1 << bits) - 1) << (32 - bits)
+    size = 1 << (32 - bits)
+    lo, hi = net + min(first, size - 2), net + min(last, size - 2)
+
+    def dotted(n: int) -> str:
+        return ".".join(str((n >> s) & 0xFF) for s in (24, 16, 8, 0))
+    return dotted(lo), dotted(hi)
+
+
+MGMT_NETMASK = _netmask(MGMT_SUBNET)
 
 # First address handed out by our own allocator. Kept clear of the gateway.
 ALLOC_IP_FIRST = 10
 ALLOC_IP_LAST = 254
+
+MGMT_DHCP_START, MGMT_DHCP_END = _host_range(
+    MGMT_SUBNET, ALLOC_IP_FIRST, ALLOC_IP_LAST)
 
 # The NAT network used for `internet = true`. libvirt ships this.
 NAT_NET = "default"
@@ -73,12 +114,15 @@ NAT_NET = "default"
 # --- local networks ----------------------------------------------------------
 #
 # Members-only segments boxes can be attached to, one /24 taken from this pool
-# per network. Chosen to sit above the management network and clear of it, the
-# LAN (192.168.1.0/24), the host's wifi (192.168.4.0/24) and libvirt's default
-# (192.168.122.0/24). Nothing routes here -- these segments have no gateway --
+# per network. Sits clear of the management network, and in 10.0.0.0/8 for the
+# same reason it does. Nothing routes here -- these segments have no gateway --
 # so a clash would only ever confuse a guest's own routing table, but there is
 # no reason to invite one.
-LOCALNET_POOL = _value("localnet_pool", "192.168.160.0/20")
+#
+# The prefix length is a real limit, not decoration: a /20 holds 16 /24s, and
+# `vm net create` refuses the 17th rather than quietly handing out a subnet
+# outside the pool it was told to use.
+LOCALNET_POOL = _value("localnet_pool", "10.150.16.0/20")
 
 # RFC1918 + link-local. Dropped on the internet NIC unless `lan = true`.
 # The real LAN (192.168.1.0/24) falls inside 192.168/16, so this does bite.

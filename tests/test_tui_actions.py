@@ -46,7 +46,7 @@ def make_app(box=None):
 def fake_box(**kw):
     s = spec_mod.parse({"name": "demo", **kw})
     return SimpleNamespace(spec=s, name="demo", state="running",
-                           ip="192.168.150.99", cid=199)
+                           ip="10.150.0.99", cid=199)
 
 
 def check(label, ok, detail=""):

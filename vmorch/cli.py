@@ -47,8 +47,8 @@ EXAMPLE_CONFIG = """\
 # --- network -----------------------------------------------------------------
 # Only change these BEFORE creating any box: existing boxes hold reserved
 # addresses on the old subnet and would be stranded.
-# mgmt_subnet    = "192.168.150.0/24"
-# mgmt_gateway   = "192.168.150.1"
+# mgmt_subnet    = "10.150.0.0/24"
+# mgmt_gateway   = "10.150.0.1"
 """
 
 

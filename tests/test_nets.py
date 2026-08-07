@@ -39,7 +39,7 @@ def check(label: str, ok: bool, detail: str = "") -> int:
     return 0 if ok else 1
 
 
-LAB = nets.LocalNet(name="lab", index=0, subnet="192.168.160.0/24")
+LAB = nets.LocalNet(name="lab", index=0, subnet="10.150.16.0/24")
 
 
 def main() -> int:
@@ -94,7 +94,7 @@ def main() -> int:
         a = alloc.allocate("boxa")
         octet = a.ip.rsplit(".", 1)[1]
         failures += check("the address reuses the management octet",
-                          LAB.address("boxa") == f"192.168.160.{octet}",
+                          LAB.address("boxa") == f"10.150.16.{octet}",
                           f"{LAB.address('boxa')} vs octet {octet}")
         failures += check("the MAC ends in the same octet",
                           LAB.mac("boxa").endswith(f":{int(octet):02x}"),
@@ -104,7 +104,7 @@ def main() -> int:
         failures += check("the MAC's net byte cannot collide with mgmt/wan",
                           LAB.mac("boxa").split(":")[4] not in ("01", "02"),
                           LAB.mac("boxa"))
-        second = nets.LocalNet(name="two", index=1, subnet="192.168.161.0/24")
+        second = nets.LocalNet(name="two", index=1, subnet="10.150.17.0/24")
         failures += check("different nets give different MACs",
                           second.mac("boxa") != LAB.mac("boxa"))
 
@@ -155,12 +155,12 @@ def main() -> int:
         # The masquerade script must not name an interface: netplan does not
         # rename NICs, so `wan` is an id and the kernel still says enp2s0.
         from vmorch import guest
-        script = guest.router_script(["192.168.160.0/24"])
+        script = guest.router_script(["10.150.16.0/24"])
         failures += check("masquerade matches on subnet, not interface",
-                          "ip saddr 192.168.160.0/24" in script
+                          "ip saddr 10.150.16.0/24" in script
                           and "oifname" not in script, script)
         failures += check("member-to-member traffic is not NATed",
-                          "ip daddr != 192.168.160.0/24" in script)
+                          "ip daddr != 10.150.16.0/24" in script)
         failures += check("forwarding is persisted, not just set",
                           "sysctl.d" in script,
                           "a router that stops routing after a reboot is the "

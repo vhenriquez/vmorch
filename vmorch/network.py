@@ -175,6 +175,8 @@ def _wan_filter_xml(allow_lan: bool) -> str:
 """
 
 
+_mgmt_addr, _mgmt_prefix = config.MGMT_SUBNET.split("/")
+
 # Guest->host is blocked by default; a shared service is the controlled
 # exception, punched in per box by services.py. Guest->guest is blocked
 # outright: boxes are single-agent and have no reason to talk to each other.
@@ -206,15 +208,19 @@ MGMT_FILTER_XML = f"""<filter name='vmorch-mgmt-filter' chain='root'>
   </rule>
 
   <!-- Block guest-INITIATED traffic to the host, and to any other box.
-       Per-box service grants are inserted above this priority. -->
+       Per-box service grants are inserted above this priority.
+
+       The mask comes from MGMT_SUBNET rather than a literal 24: that value is
+       configurable, and a hardcoded mask on a /16 management network would
+       leave three quarters of it reachable. -->
   <rule action='drop' direction='out' priority='500'>
-    <tcp dstipaddr='{config.MGMT_SUBNET.split('/')[0]}' dstipmask='24'/>
+    <tcp dstipaddr='{_mgmt_addr}' dstipmask='{_mgmt_prefix}'/>
   </rule>
   <rule action='drop' direction='out' priority='500'>
-    <udp dstipaddr='{config.MGMT_SUBNET.split('/')[0]}' dstipmask='24'/>
+    <udp dstipaddr='{_mgmt_addr}' dstipmask='{_mgmt_prefix}'/>
   </rule>
   <rule action='drop' direction='out' priority='500'>
-    <icmp dstipaddr='{config.MGMT_SUBNET.split('/')[0]}' dstipmask='24'/>
+    <icmp dstipaddr='{_mgmt_addr}' dstipmask='{_mgmt_prefix}'/>
   </rule>
 </filter>
 """

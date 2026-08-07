@@ -127,7 +127,7 @@ def main() -> int:
 
         # --- the note survives to the caller ----------------------------
         box = boxes.Box(spec=make_spec(internet=True), state="running",
-                        ip="192.168.150.99", cid=199)
+                        ip="10.150.0.99", cid=199)
         failures += check("a Box carries no note by default", box.note == "")
         box.note = "configured the internet NIC inside the box"
         failures += check("a note can be attached for the caller to print",
