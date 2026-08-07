@@ -155,6 +155,30 @@ def _ensure_disk_perms(name: str) -> None:
             continue
 
 
+def arm_filters(box_spec: BoxSpec) -> None:
+    """Redefine every filter this box's NICs reference, immediately before a start.
+
+    **Load-bearing.** network.arm_filters() explains the finding: a box started
+    without a filter definition just before it is not actually filtered, for
+    around a hundred seconds, whatever `nwfilter-binding-list` says. What
+    matters is only that a define happens between the previous state and the
+    start.
+
+    That call covers the three *shared* filters. It does not cover the ones
+    actually bound to the interfaces: nic0 references vmorch-box-<name>, and
+    every local-net NIC references vmorch-net-<net>-<box>. Those were redefined
+    on create and apply -- which build them anyway -- but not on `vm start` or
+    `vm reseed`, so those two paths still started boxes whose own filters had
+    not been touched. Same hole, on the paths the original fix did not reach.
+
+    Everything a start needs is therefore defined here, in one place, and every
+    start path calls this rather than assembling its own subset.
+    """
+    network.arm_filters()
+    services.ensure_box_filter(box_spec)
+    _ensure_net_filters(box_spec)
+
+
 def _graceful_restart_stop(name: str, timeout: int = 90) -> None:
     """Shut a box down properly before rebuilding or reseeding it.
 
@@ -284,10 +308,10 @@ def create(box_spec: BoxSpec, start: bool = True) -> Box:
     _regenerate_ssh()
 
     if start:
-        # Immediately before the start, every time: see network.arm_filters.
-        # ensure_base() above is too early -- the image copy, the overlay and
-        # the seed build all happen in between.
-        network.arm_filters()
+        # Immediately before the start, every time: see arm_filters above.
+        # ensure_base() near the top is too early -- the image copy, the
+        # overlay and the seed build all happen in between.
+        arm_filters(box_spec)
         virsh.run("start", box_spec.domain)
 
         # A router is the one box whose readiness other boxes depend on, so it
@@ -303,6 +327,13 @@ def create(box_spec: BoxSpec, start: bool = True) -> Box:
             guest.configure_router(
                 box_spec.name,
                 [netlib.get(n).subnet for n in box_spec.routes_for])
+
+        # The sudo password is set here rather than in the seed, so it never
+        # exists in cleartext inside the box's own cloud-init data. Needs the
+        # box up, hence after the start.
+        if box_spec.sudo == "password":
+            _wait_reachable(box_spec.name)
+            cloudinit.set_password(box_spec)
 
     return load(box_spec.name)
 
@@ -553,7 +584,7 @@ def apply(name: str) -> Box:
     if was_running:
         _ensure_console_log(name)
         _ensure_disk_perms(name)
-        network.arm_filters()
+        arm_filters(box.spec)
         virsh.run("start", box.spec.domain)
 
     # After the restart, so a box that was running grows its filesystem online
@@ -571,7 +602,7 @@ def start(name: str) -> None:
     _ensure_console_log(name)
     _ensure_disk_perms(name)
     if box.state != "running":
-        network.arm_filters()
+        arm_filters(box.spec)
         virsh.run("start", box.spec.domain)
 
 
@@ -717,8 +748,15 @@ def reseed(name: str) -> Box:
         _graceful_restart_stop(name)
     _ensure_console_log(name)
     _ensure_disk_perms(name)
-    network.arm_filters()
+    arm_filters(box.spec)
     virsh.run("start", box.spec.domain)
+
+    # Reseeding relocks the account (the seed's runcmd does), so password mode
+    # has to be re-established afterwards or `vm password` prints a secret the
+    # box no longer accepts.
+    if box.spec.sudo == "password":
+        _wait_reachable(name)
+        cloudinit.set_password(box.spec)
     return load(name)
 
 

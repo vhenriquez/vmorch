@@ -267,15 +267,18 @@ DEFAULT_IMAGE = _value("default_image", "ubuntu-24.04")
 #:   "nopasswd"  passwordless sudo to root (default). The agent owns the box,
 #:               which is the premise -- the boundary is the VM, not in-guest
 #:               privilege.
+#:   "password"  sudo needs a password that is generated on the host and set
+#:               over SSH after first boot, so it is never in the seed or in
+#:               cloud-init's instance data. An agent that compromises the box
+#:               unprivileged cannot read it; a human runs `vm password <box>`.
 #:   "none"      no sudo at all. Raises an unprivileged in-guest compromise
 #:               (a hostile dependency, a prompt injection) from one step to
 #:               root into two, which matters because most paths at the
 #:               hypervisor need kernel context. Costs the agent the ability to
 #:               install packages itself -- bake them into a golden image.
 #:
-#: A password-protected sudo is deliberately NOT offered: the password would
-#: have to be reachable by the agent, which makes it decoration, or not, which
-#: is "none" with worse failure modes.
+#: Neither "password" nor "none" is a boundary on its own: the boundary is the
+#: VM. They raise the cost of an in-guest compromise, nothing more.
 #:
 #: vmorch keeps its own root path either way, so `vm share`, `vm service` and
 #: `vm golden` work in both modes. Changing this on an existing box needs

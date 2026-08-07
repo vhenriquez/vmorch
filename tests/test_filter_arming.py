@@ -53,7 +53,11 @@ def starts_and_arms(fn: ast.FunctionDef) -> tuple[int, int]:
             first = node.args[0]
             if isinstance(first, ast.Constant) and first.value == "start":
                 start_line = max(start_line, node.lineno)
-        if isinstance(f, ast.Attribute) and f.attr == "arm_filters":
+        # boxes.arm_filters(spec) -- a bare Name, not an attribute. It covers
+        # the shared filters *and* the per-box and per-net ones; a start path
+        # that reached past it to network.arm_filters() would arm only the
+        # shared three, which is the hole this test now also guards.
+        if isinstance(f, ast.Name) and f.id == "arm_filters":
             arm_line = max(arm_line, node.lineno)
     return start_line, arm_line
 
@@ -82,7 +86,7 @@ def main() -> int:
         failures += check(
             f"{name}() arms the filters before starting",
             arm_line and arm_line < start_line,
-            "no network.arm_filters() call before virsh.run('start', ...) "
+            "no arm_filters(spec) call before virsh.run('start', ...) "
             f"(arm at line {arm_line or '-'}, start at line {start_line})")
 
     # Ordering is the whole point: arming *after* the start was tried first and
@@ -95,11 +99,26 @@ def main() -> int:
                               "is already up unfiltered")
 
     # And the function has to exist, with ensure_filters behind it.
-    from vmorch import network
+    from vmorch import network, boxes
     failures += check("network.arm_filters exists",
                       callable(getattr(network, "arm_filters", None)))
     failures += check("network.ensure_filters exists",
                       callable(getattr(network, "ensure_filters", None)))
+    failures += check("boxes.arm_filters exists",
+                      callable(getattr(boxes, "arm_filters", None)))
+
+    # The per-box filter is the one bound to nic0, and the per-net filters to
+    # the local-net NICs. Arming only the three shared filters left those
+    # untouched on `vm start` and `vm reseed`, which is the same hole the
+    # original fix closed on the create path. Assert boxes.arm_filters reaches
+    # all three kinds.
+    arm_src = ast.get_source_segment(SRC, functions["arm_filters"]) or ""
+    for needed, why in (
+            ("network.arm_filters", "the shared mgmt and wan filters"),
+            ("services.ensure_box_filter", "the per-box filter bound to nic0"),
+            ("_ensure_net_filters", "the per-net filters on local-net NICs")):
+        failures += check(f"arm_filters() covers {why}", needed in arm_src,
+                          f"boxes.arm_filters does not call {needed}")
 
     print("FAILED" if failures else "every start path arms the filters first")
     return 1 if failures else 0

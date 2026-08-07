@@ -28,7 +28,8 @@ def _ssh(target: str, argv: list[str], script: str):
     )
 
 
-def run(name: str, script: str, check: bool = True) -> str:
+def run(name: str, script: str, check: bool = True,
+        stdin_extra: str = "") -> str:
     """Execute a shell script inside the box, with privilege.
 
     Connects as **root over the tool's own key**, not as the agent user via
@@ -40,10 +41,14 @@ def run(name: str, script: str, check: bool = True) -> str:
     provisioned -- cloud-init runs once, so an older box has no root key until
     it is reseeded.
     """
-    proc = _ssh(f"root@{name}", ["bash", "-s"], script)
+    # stdin_extra is appended after the script, so `read` inside it consumes a
+    # secret that never appears in an argument vector -- and so is never visible
+    # in the guest's process list.
+    payload = script + stdin_extra
+    proc = _ssh(f"root@{name}", ["bash", "-s"], payload)
 
     if proc.returncode == 255:          # ssh transport failure, not the script
-        legacy = _ssh(name, ["sudo", "bash", "-s"], script)
+        legacy = _ssh(name, ["sudo", "bash", "-s"], payload)
         if legacy.returncode != 255:
             proc = legacy
 
