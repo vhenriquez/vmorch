@@ -1,0 +1,153 @@
+# Installation
+
+## Requirements
+
+**Python 3.11 or newer.** Config parsing uses `tomllib`, which entered the
+standard library in 3.11. Installing on 3.10 is refused with a message rather
+than failing later at import.
+
+**Linux.** The allocation ledger is locked with `fcntl` and the TUI is drawn
+with `curses`. There is no Windows path, and macOS is untested.
+
+**No Python dependencies.** Everything is standard library. Installing vmorch
+pulls in nothing.
+
+Plenty is needed that is *not* a Python dependency:
+
+| Needed for | Package (Debian/Ubuntu) |
+|---|---|
+| everything | `libvirt-daemon-system`, `qemu-kvm` |
+| `qemu:///system` without sudo | membership of the `libvirt` group |
+| building the cloud-init seed ISO | `cloud-image-utils` (`cloud-localds`) |
+| overlays, snapshots, resizing | `qemu-img` (ships with `qemu-utils`) |
+| granting qemu access to the state directory | `acl` (`setfacl`, `getfacl`) |
+| shared folders | virtiofs support in libvirt/qemu |
+| the connection audit | `nftables` (optional) |
+
+```bash
+sudo apt install libvirt-daemon-system qemu-kvm qemu-utils \
+                 cloud-image-utils acl
+sudo usermod -aG libvirt "$USER"
+```
+
+**Log out and back in** after the `usermod`, or the group membership will not
+apply and every `virsh` call will ask for authentication.
+
+No root is needed at runtime. The one thing that would have needed it — letting
+qemu read the state directory — is done with an ACL granting exactly one system
+account, as you, rather than by opening the directory to every local user.
+
+## Install
+
+```bash
+pip install git+https://github.com/vhenriquez/vmorch
+```
+
+This gives you `vmorch` and `vmorch-tui` on your PATH. In a virtualenv or with
+`pipx`, both work the same way.
+
+### Or run from a clone, without installing
+
+```bash
+git clone https://github.com/vhenriquez/vmorch && cd vmorch
+python3 -m vmorch --help
+python3 -m vmorch.tui
+```
+
+Equally supported. The documentation writes `vmorch`; substitute
+`python3 -m vmorch` throughout if this is how you are running it.
+
+## First run
+
+```bash
+vmorch config
+```
+
+Prints where everything will live, creates any directory that does not exist
+yet, and shows free space. Nothing else touches your system until you create a
+box.
+
+Then:
+
+```bash
+vmorch new agent-alpha
+```
+
+The first box takes longer than later ones, because the cloud image has to be
+downloaded (a few hundred MB) and verified. After that, creating a box is a
+qcow2 overlay over the shared base and takes seconds; boot to a reachable SSH
+takes about a minute.
+
+```bash
+ssh agent-alpha
+```
+
+That works with no further setup: vmorch writes an ssh config fragment, keeps
+its own `known_hosts`, and generates a dedicated key on first use. It never
+edits your existing config beyond adding one `Include` line, and it backs the
+file up before doing so.
+
+## Where things go
+
+| Path | What |
+|---|---|
+| `~/vmorch/bases/` | golden images. Boxes are overlays on these — **put this on your fastest disk** |
+| `~/vmorch/boxes/<name>/` | per-box spec, disk, seed ISO, console log, snapshots |
+| `~/vmorch/cloud_images/` | verified downloads, kept so a rebuild needs no network. Cold; fine on a slow disk |
+| `~/vmorch/allocations.json` | the address, MAC and vsock CID ledger |
+| `~/.config/vmorch/config.toml` | your overrides (optional) |
+| `~/.ssh/config.d/vmorch` | generated ssh config, owned entirely by vmorch |
+| `~/.ssh/vmorch_known_hosts` | separate host keys, so rebuilding a box does not trip a warning |
+
+Every path is configurable:
+
+```bash
+vmorch config --write     # writes a commented starter config
+```
+
+**One constraint is not negotiable.** Nothing holding a disk image may live in a
+hidden directory under `$HOME`. Ubuntu's AppArmor profile for `virt-aa-helper`
+denies any dot-directory outright, so it cannot read the disk, cannot generate
+qemu's profile, and the box fails to start with a bare "Permission denied" that
+looks like a file-mode problem and is not. vmorch refuses such a path at startup
+rather than letting you find out later.
+
+## Upgrading
+
+```bash
+pip install --upgrade git+https://github.com/vhenriquez/vmorch
+```
+
+Existing boxes keep working: their specs are on disk and the domain XML is
+regenerated from them.
+
+**If you are coming from before the 10.x network default**, existing boxes hold
+reserved addresses on `192.168.150.0/24`. Either pin the old values before
+upgrading:
+
+```toml
+# ~/.config/vmorch/config.toml
+mgmt_subnet  = "192.168.150.0/24"
+mgmt_gateway = "192.168.150.1"
+```
+
+or destroy and recreate the boxes. Changing the management subnet with boxes
+already on the old one strands them.
+
+## Uninstalling
+
+```bash
+vmorch rm <box>            # each box: undefines the domain, reclaims the disk
+pip uninstall vmorch
+```
+
+Then, if you want the state gone as well:
+
+```bash
+rm -rf ~/vmorch ~/.config/vmorch
+rm ~/.ssh/config.d/vmorch ~/.ssh/vmorch_known_hosts ~/.ssh/vmorch_ed25519*
+setfacl -bn ~/vmorch       # if the directory is still there
+```
+
+The `Include config.d/vmorch` line in `~/.ssh/config` is yours to remove; vmorch
+does not edit that file again after adding it.

@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # The whole point of this job is that it needs nothing. No libvirt, no
+  # network, no dependencies -- if it ever starts needing any of those, the
+  # suite has stopped being runnable on a fresh clone and this will say so
+  # before a contributor discovers it the hard way.
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Enforces requires-python rather than asserting it. 3.11 is the floor
+        # because config parsing uses tomllib.
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Confirm libvirt is absent
+        # Asserted, not assumed. The suite used to shell out to virsh for the
+        # NAT gateway and bridge name, so three checks could only pass on a
+        # host with libvirt configured. If virsh ever appears on the runner
+        # this job would start passing for the wrong reason.
+        run: |
+          if command -v virsh >/dev/null 2>&1; then
+            echo "virsh is present on the runner; this job no longer proves"
+            echo "the suite runs without libvirt."
+            exit 1
+          fi
+          echo "no virsh, as intended"
+
+      - name: Run the suite
+        run: ./run-tests
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      - name: Install the built wheel and run it
+        run: |
+          python -m pip install dist/*.whl
+          vmorch --help
+          vmorch ls
+
+      - name: Confirm nothing was pulled in
+        # dependencies = [] is a promise the README makes. This is what keeps
+        # it true: if a third-party import creeps in, the wheel gains a
+        # Requires-Dist and this fails.
+        run: |
+          deps=$(python -c "
+          import importlib.metadata as m
+          print(m.metadata('vmorch').get_all('Requires-Dist') or [])
+          ")
+          echo "Requires-Dist: $deps"
+          [ "$deps" = "[]" ] || { echo "vmorch gained a dependency"; exit 1; }
+
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: No personal paths or identifiers
+        # The history was rewritten once to remove these. This is what stops
+        # them coming back in a later commit and forcing that again.
+        run: |
+          # --exclude=ci.yml because this file necessarily contains the very
+          # strings it searches for, and would otherwise always fail itself.
+          patterns='/home/[a-z]+/(Vaults|Documents)|storage_disk|@gmail\.com|ExtendedMemory'
+          if grep -rInE "$patterns" --exclude-dir=.git --exclude=ci.yml . ; then
+            echo
+            echo "A personal path or identifier reached the tree. See SECURITY.md"
+            echo "and the note in CONTRIBUTING.md about what must not be committed."
+            exit 1
+          fi
+          echo "clean"
+
+      - name: Every Python file compiles
+        run: python -m compileall -q vmorch tests
