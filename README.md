@@ -138,6 +138,23 @@ Each is commented where it bites.
   silently never fires. Use `ssh-keygen -R`.
 - **XML comments cannot contain `--`.** `tests/test_generated_xml.py` guards it.
 
+## Known limitations
+
+- **Image checksums are not signatures.** Downloads are verified against the
+  distro's published `SHA256SUMS`, fetched over HTTPS from the same host as the
+  image. That catches a truncated download or a rolled release; it does not
+  catch a hostile mirror, which can serve a matching sums file. Verifying the
+  detached GPG signature would close this and is not implemented.
+- **`via: ssh` and `via: vsock` service sharing are designed, not built.**
+  `vm service` refuses them rather than recording a grant that does nothing.
+- **No golden image ships.** `vm golden` builds one; until you do, boxes boot
+  the plain cloud image and `packages:` needs a box with internet.
+- **DNS-over-HTTPS is invisible to the audit.** It is HTTPS to port 443 and
+  indistinguishable from other web traffic without blocking providers outright.
+  The connection log still shows the flow.
+- **Boxes do not autostart after a host reboot.** `vm ls` still lists them;
+  `vm start <box>` brings one back.
+
 ## Requirements
 
 libvirt/qemu with virtiofs, `cloud-image-utils`, and membership of the `libvirt`

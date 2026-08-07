@@ -17,6 +17,18 @@ Both are created on demand; both can be moved from config.toml.
 
 Nothing is ever used before its checksum matches the distro's published sums
 file.
+
+**That is integrity, not authenticity.** The sums file is fetched over HTTPS
+from the same host as the image, so the trust anchor is TLS and the mirror: an
+attacker who can serve you a modified image can serve you a sums file that
+matches it, and the check passes. Debian and Ubuntu both publish detached GPG
+signatures over these files, and verifying one would close the gap; vmorch does
+not do it yet, because doing it properly means shipping and pinning the distro
+signing keys rather than fetching those over the same channel too.
+
+So the checksum protects against a truncated download, a corrupted mirror and a
+silently rolled release. It does not protect against a hostile one. Stated
+plainly here because the alternative is a comment that reads like it does.
 """
 
 from __future__ import annotations
@@ -580,7 +592,11 @@ def _fetch_text(url: str) -> str:
 
 
 def _expected_digest(entry: CatalogueEntry) -> str:
-    """Pull this image's digest out of the distro's sums file."""
+    """Pull this image's digest out of the distro's sums file.
+
+    Unsigned -- see the note at the top of this module on what that does and
+    does not buy you.
+    """
     for line in _fetch_text(entry.sums_url).splitlines():
         parts = line.split()
         if len(parts) == 2 and parts[1].lstrip("*") == entry.filename:
